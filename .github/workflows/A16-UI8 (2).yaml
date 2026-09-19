@@ -188,7 +188,7 @@ jobs:
             wget -qO "$PATCH_FILE" "$BASE_URL/$PATCH_FILE"
             
             # Yamayı toleransla uygula, çakışırsa sistemi çökertmeden diğerine geç
-            patch -p1 --fuzz=3 < "$PATCH_FILE" || true
+            patch -p1 --fuzz=3 < "$PATCH_FILE"
           done
           
           echo "------------------------------------------------"
