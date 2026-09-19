@@ -128,23 +128,6 @@ jobs:
 
       - name: ⚙️ Get necessary tools
         uses: ./.github/workflows/build-ready
-
-      - name: ⚡ Apply No-OC & Undervolt Patch
-        shell: bash
-        run: |
-          # Switching to kernel directory
-          cd $GITHUB_WORKSPACE/device_kernel
-          
-          echo "[*] Downloading No-OC & Undervolt patch..."
-          curl -sL "https://github.com/maelmsss/exynos982x_kernel/compare/main...Devandroid-bit:exynos982x_kernel:Devandroid-bit-no-oc-undervolt.patch" -o no_oc_undervolt.patch
-          
-          echo "[*] Applying patch to kernel source..."
-          patch -p1 < no_oc_undervolt.patch
-          
-          echo "[*] Removing unwanted workflow file from the patch..."
-          rm -f .github/workflows/bore_scheduler.yml
-          
-          echo "[+] Patch applied successfully!"
           
       - name: ⚙️ Custom Scheduler Optimizations (Hardcoded & Locked)
         shell: bash
@@ -229,48 +212,6 @@ jobs:
           # Add NoMount config to defconfig
           echo "CONFIG_NOMOUNT=y" >> arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
           echo "[+] NoMount integration completed."
-
-      - name: 🕵️ Integrate VPNHide Next (Clean & Stable Mode)
-        shell: bash
-        run: |
-            set -x
-            cd $GITHUB_WORKSPACE/device_kernel
-
-            echo "[+] VPNHide Next backend repo ..."
-            rm -rf /tmp/vpnhide_next_backend
-            git clone --depth=1 https://github.com/soranerai/vpnhide_next_backend.git /tmp/vpnhide_next_backend
-
-            if [ ! -f /tmp/vpnhide_next_backend/kpatch/scripts/apply.sh ]; then
-              echo "[-] WARNING."
-              exit 1
-            fi
-
-            echo "[+] 🛑 Bypassing strict Python injector..."
-            cat << 'EOF' > /tmp/vpnhide_next_backend/kpatch/scripts/inject_legacy.py
-            print("[+] Python injector bypassed. Manual sed injection applied.")
-            EOF
-
-            echo "[+] 🔧 Pure Sed Injection for Exynos..."
-            sed -i '/seq_printf(seq, "%pi6 %02x ", &rt->rt6i_dst.addr, rt->rt6i_dst.plen);/i\
-            #ifdef CONFIG_VPNHIDE\n\t\tif (vpnhide_should_hide_dev(rt->fib6_nh.nh_dev))\n\t\t\tcontinue;\n#endif' net/ipv6/ip6_fib.c
-
-            sed -i '/if (!net_eq(dev_net(dev), net))/i\
-            #ifdef CONFIG_VPNHIDE\n\t\tif (vpnhide_should_hide_dev(dev))\n\t\t\tcontinue;\n#endif' net/core/dev.c
-
-
-            echo "[+] Kernel tree..."
-            chmod +x /tmp/vpnhide_next_backend/kpatch/scripts/apply.sh
-
-            /tmp/vpnhide_next_backend/kpatch/scripts/apply.sh \
-              "$GITHUB_WORKSPACE/device_kernel" \
-              upstream-4.14
-
-            echo "[+] CONFIG_VPNHIDE=y ..."
-            DEFCONFIG_FILE="arch/arm64/configs/${{ env.DEFCONFIG_NAME }}"
-            sed -i '/CONFIG_VPNHIDE/d' "$DEFCONFIG_FILE"
-            echo "CONFIG_VPNHIDE=y" >> "$DEFCONFIG_FILE"
-
-            echo "[+] VPNHide Next (stable mode) ."
             
       - name: 🧰 Patch Kernel of Re:Kernel
         if: env.REKERNEL_ENABLE == 'true'
