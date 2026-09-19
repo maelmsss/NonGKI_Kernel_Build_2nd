@@ -284,7 +284,6 @@ jobs:
             cat >> "$DEFCONFIG_FILE" << 'EOF'
             
             CONFIG_SCHED_BORE=y
-            CONFIG_KPM=y
             
             EOF
             
