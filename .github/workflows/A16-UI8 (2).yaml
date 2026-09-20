@@ -199,6 +199,200 @@ jobs:
 
       - name: 🔗 Patch for no-kprobe
         uses: ./.github/workflows/patch-no-kprobe
+
+      - name: 🕵️ Integrate VPNHide Next (Legacy Android 4.14)
+        shell: bash
+        run: |
+          set -x
+          cd $GITHUB_WORKSPACE/device_kernel
+          echo "[+] VPNHide Next backend repo..."
+          rm -rf /tmp/vpnhide_next_backend
+          git clone --depth=1 https://github.com/soranerai/vpnhide_next_backend.git /tmp/vpnhide_next_backend
+
+          echo "[+] Fixing Exynos variable names in inject_legacy.py..."
+          sed -i 's/rt6i_dst/fib6_dst/g' /tmp/vpnhide_next_backend/kpatch/scripts/inject_legacy.py
+          sed -i 's/rt->dst.dev/rt->fib6_nh.nh_dev/g' /tmp/vpnhide_next_backend/kpatch/scripts/inject_legacy.py
+
+          echo "[+] Running apply.sh..."
+          chmod +x /tmp/vpnhide_next_backend/kpatch/scripts/apply.sh
+          /tmp/vpnhide_next_backend/kpatch/scripts/apply.sh "$GITHUB_WORKSPACE/device_kernel" upstream-4.14
+
+          echo "[+] 4.14 UDP_SEGMENT fingerprint fix..."
+          python3 - <<'PY'
+          import re, sys
+          from pathlib import Path
+
+          k = Path(".")
+
+          # --- 1) hook_socket.c: 4.18 guard'ını kaldır, gso_size yazma ---
+          hook = k / "security/vpnhide/hook_socket.c"
+          if not hook.exists():
+              sys.exit("missing security/vpnhide/hook_socket.c — apply.sh failed")
+          t = hook.read_text()
+          if "level == SOL_UDP" in t and "KERNEL_VERSION(4, 18, 0)" in t:
+              t2, n = re.subn(
+                  r"#if LINUX_VERSION_CODE >= KERNEL_VERSION\(4,\s*18,\s*0\)\s*"
+                  r"else if \(level == SOL_UDP\) \{.*?\n#endif",
+                  """#ifndef SOL_UDP
+          #define SOL_UDP 17
+          #endif
+          #ifndef UDP_SEGMENT
+          #define UDP_SEGMENT 103
+          #endif
+          \telse if (level == SOL_UDP) {
+          \t\tif (optname == UDP_SEGMENT) {
+          \t\t\tif (sk->sk_protocol != IPPROTO_UDP ||
+          \t\t\t    sk->sk_type != SOCK_DGRAM ||
+          \t\t\t    optlen != sizeof(int))
+          \t\t\t\treturn 0;
+          \t\t\tsk->sk_mark |= VH_SK_PROBE_MARK;
+          \t\t\trecord_kmod_intercept(uid, HOOK_SETSOCKOPT);
+          \t\t\treturn 1;
+          \t\t}
+          \t}""",
+                  t,
+                  count=1,
+                  flags=re.S,
+              )
+              if n != 1:
+                  sys.exit("UDP_SEGMENT #if block not matched in hook_socket.c")
+              hook.write_text(t2)
+              print("[+] hook_socket.c: UDP_SEGMENT spoof enabled for 4.14")
+          else:
+              print("[=] hook_socket.c already without 4.18 UDP_SEGMENT guard")
+
+          # --- 2) uapi: UDP_SEGMENT / UDP_GRO ---
+          udp_h = k / "include/uapi/linux/udp.h"
+          if not udp_h.exists():
+              udp_h = k / "include/linux/udp.h"
+          h = udp_h.read_text()
+          if "UDP_SEGMENT" not in h:
+              if "UDP_NO_CHECK6_RX" in h:
+                  h = h.replace(
+                      "#define UDP_NO_CHECK6_RX\t102",
+                      "#define UDP_NO_CHECK6_RX\t102\n#define UDP_SEGMENT\t\t103\n#define UDP_GRO\t\t104",
+                      1,
+                  )
+              else:
+                  h += "\n#define UDP_SEGMENT 103\n#define UDP_GRO 104\n"
+              udp_h.write_text(h)
+              print(f"[+] {udp_h}: added UDP_SEGMENT/UDP_GRO")
+          else:
+              print(f"[=] {udp_h}: UDP_SEGMENT already present")
+
+          # --- 3) udp.c stub: ENOPROTOOPT yerine success ---
+          udp_c = k / "net/ipv4/udp.c"
+          c = udp_c.read_text()
+
+          def inject_cases(src, fn, set_not_get):
+              m = re.search(rf"\n[^\n]*\b{fn}\s*\(", src)
+              if not m:
+                  print(f"[!] {fn} not found")
+                  return src
+              start = m.start()
+              # function body until next top-level function is too hard; limit to 8k
+              body = src[start:start+9000]
+              if "case UDP_SEGMENT:" in body:
+                  print(f"[=] {fn}: UDP_SEGMENT already present")
+                  return src
+              if set_not_get:
+                  block = """
+          \tcase UDP_SEGMENT:
+          \t\tif (val < 0 || val > 0xFFFF)
+          \t\t\treturn -EINVAL;
+          \t\tbreak;
+          \tcase UDP_GRO:
+          \t\tbreak;
+          """
+              else:
+                  block = """
+          \tcase UDP_SEGMENT:
+          \t\tval = 0;
+          \t\tbreak;
+          \tcase UDP_GRO:
+          \t\tval = 0;
+          \t\tbreak;
+          """
+              body2, n = re.subn(
+                  r"(\n\tdefault:\n\t\terr = -ENOPROTOOPT;)",
+                  block + r"\1",
+                  body,
+                  count=1,
+              )
+              if n != 1:
+                  # getsockopt uses different default
+                  body2, n = re.subn(
+                      r"(\n\tdefault:\n\t\treturn -ENOPROTOOPT;)",
+                      block + r"\1",
+                      body,
+                      count=1,
+                  )
+              if n != 1:
+                  print(f"[!] {fn}: default ENOPROTOOPT not found, skip")
+                  return src
+              print(f"[+] {fn}: stubbed UDP_SEGMENT")
+              return src[:start] + body2 + src[start+9000:]
+
+          c = inject_cases(c, "udp_lib_setsockopt", True)
+          c = inject_cases(c, "udp_lib_getsockopt", False)
+          udp_c.write_text(c)
+
+          # --- 4) setsockopt hook insert kaçtıysa net/socket.c'ye bas ---
+          sock_c = k / "net/socket.c"
+          s = sock_c.read_text()
+          if "vpnhide_setsockopt_sock" in s:
+              print("[=] net/socket.c already has vpnhide_setsockopt_sock")
+          else:
+              needle = "\tif (sock != NULL) {"
+              # SYSCALL_DEFINE5(setsockopt / SYSCALL_DEFINE5(SYSC_setsockopt
+              m = re.search(
+                  r"SYSCALL_DEFINE5\(\s*(?:SYSC_)?setsockopt\b.*?\)\s*\{",
+                  s,
+                  re.S,
+              )
+              if not m:
+                  m = re.search(r"\nSYSCALL_DEFINE5\(setsockopt,", s)
+              if not m:
+                  sys.exit("setsockopt syscall not found in net/socket.c")
+              fn_start = m.start()
+              window = s[fn_start:fn_start+2500]
+              insert = """
+          #ifdef CONFIG_VPNHIDE
+          \t\t{
+          \t\t\tint _vret = vpnhide_setsockopt_sock(sock, level, optname, optval, optlen);
+          \t\t\tif (_vret) {
+          \t\t\t\terr = (_vret > 0) ? 0 : _vret;
+          \t\t\t\tgoto out_put;
+          \t\t\t}
+          \t\t}
+          #endif
+          """
+              if needle in window:
+                  window2 = window.replace(needle, needle + insert, 1)
+              elif "if (!sock)" in window or "if (sock ==" in window:
+                  #  if (!sock)\n\t\treturn -EBADF;\n
+                  window2, n = re.subn(
+                      r"(if\s*\(\s*!sock[^\)]*\)\s*\{?\s*return\s+-EBADF;\s*\}?)",
+                      r"\1" + insert,
+                      window,
+                      count=1,
+                  )
+                  if n != 1:
+                      sys.exit("could not find sock lookup in setsockopt")
+              else:
+                  sys.exit("could not find insert point in setsockopt")
+              sock_c.write_text(s[:fn_start] + window2 + s[fn_start+2500:])
+              print("[+] net/socket.c: injected vpnhide_setsockopt_sock")
+
+          print("[+] UDP_SEGMENT 4.14 fix done")
+          PY
+
+          echo "[+] Updating defconfig..."
+          DEFCONFIG_FILE="arch/arm64/configs/${{ env.DEFCONFIG_NAME }}"
+          sed -i '/CONFIG_VPNHIDE/d' "$DEFCONFIG_FILE"
+          echo "CONFIG_VPNHIDE=y" >> "$DEFCONFIG_FILE"
+
+          echo "[+] VPNHide Next integrated successfully."
     
       - name: 🧩 Patch Kernel of NoMount
         shell: bash
