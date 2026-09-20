@@ -440,14 +440,13 @@ jobs:
                 print("[=] UDP GSO TX already present, skip")
                 sys.exit(0)
             
-            # 64-Bit Feature limitine takilmamak icin Android'de hic kullanilmayan
-            # FCoE (Fibre Channel over Ethernet) ozelliginin bitini maskeliyoruz.
+            # 64-Bit Feature limitine takilmamak icin standart SCTP ozelliginin bitini alias (maske) olarak kullaniyoruz.
             if "SKB_GSO_UDP_L4" not in skbuff:
                 sub_once(
                     "include/linux/skbuff.h",
                     r"(SKB_GSO_ESP\s*=\s*1\s*<<\s*\d+,)",
-                    r"\1\n\tSKB_GSO_UDP_L4 = SKB_GSO_FCOE,",
-                    label="SKB_GSO_UDP_L4",
+                    r"\1\n\tSKB_GSO_UDP_L4 = SKB_GSO_SCTP,",
+                    label="SKB_GSO_UDP_L4 alias"
                 )
             
             nf = must("include/linux/netdev_features.h").read_text()
@@ -455,18 +454,11 @@ jobs:
                 sub_once(
                     "include/linux/netdev_features.h",
                     r"(#define NETIF_F_GSO_ESP\s+.*\n)",
-                    r"\1#define NETIF_F_GSO_UDP_L4\tNETIF_F_FCOE\n",
-                    label="NETIF_F_GSO_UDP_L4 define",
+                    r"\1#define NETIF_F_GSO_UDP_L4\tNETIF_F_GSO_SCTP\n",
+                    label="NETIF_F_GSO_UDP_L4 define"
                 )
-                t = Path("include/linux/netdev_features.h").read_text()
-                if "NETIF_F_GSO_SOFTWARE" in t and "GSO_UDP_L4" not in t.split("NETIF_F_GSO_SOFTWARE")[1][:400]:
-                    sub_once(
-                        "include/linux/netdev_features.h",
-                        r"(#define NETIF_F_GSO_SOFTWARE\s*\([^)]*)\)",
-                        r"\1 | NETIF_F_GSO_UDP_L4)",
-                        label="GSO_SOFTWARE includes UDP_L4",
-                    )
             
+            # Structlara gso_size ekleme
             append_to_struct_safe("udp_sock", "\t__u16 gso_size;", ["include/linux/udp.h", "include/net/udp.h"])
             append_to_struct_safe("inet_cork", "\t__u16 gso_size;", ["include/net/inet_sock.h"])
             
