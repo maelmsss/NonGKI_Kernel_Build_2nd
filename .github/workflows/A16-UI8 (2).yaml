@@ -206,10 +206,27 @@ jobs:
           PATCH_SCRIPT_1: |
             import re, sys
             from pathlib import Path
-            
+
             k = Path(".")
-            
-            # --- 1) hook_socket.c: 4.18 guard'ını kaldır, gso_size yazma ---
+
+            def fn_span(src, sig):
+                m = re.search(sig, src)
+                if not m:
+                    return None
+                i = src.find("{", m.start())
+                if i < 0:
+                    return None
+                d = 0
+                for j in range(i, len(src)):
+                    if src[j] == "{":
+                        d += 1
+                    elif src[j] == "}":
+                        d -= 1
+                        if d == 0:
+                            return m.start(), j + 1
+                return None
+
+            # --- 1) hook_socket.c: 4.18 guard + MSS'i asla tünel boyutunda bırakma ---
             hook = k / "security/vpnhide/hook_socket.c"
             if not hook.exists():
                 sys.exit("missing security/vpnhide/hook_socket.c — apply.sh failed")
@@ -241,15 +258,37 @@ jobs:
                 )
                 if n != 1:
                     sys.exit("UDP_SEGMENT #if block not matched in hook_socket.c")
-                hook.write_text(t2)
+                t = t2
                 print("[+] hook_socket.c: UDP_SEGMENT spoof enabled for 4.14")
             else:
                 print("[=] hook_socket.c already without 4.18 UDP_SEGMENT guard")
-            
-            # --- 2) udp.c stub: ENOPROTOOPT yerine success (Undeclared Bypass) ---
+
+            # sip.ipv4_mtu tun/wg (1280) olsa bile probe 1460/1440 görsün
+            n_int = t.count("int mss = mtu > header_len ? mtu - header_len : 1460;")
+            n_u32 = t.count("u32 mss = mtu > header_len ? mtu - header_len : 1460;")
+            t = t.replace(
+                "int mss = mtu > header_len ? mtu - header_len : 1460;",
+                "int mss = (sk->sk_family == AF_INET6) ? 1440 : 1460;",
+            )
+            t = t.replace(
+                "u32 mss = mtu > header_len ? mtu - header_len : 1460;",
+                "u32 mss = (sk->sk_family == AF_INET6) ? 1440 : 1460;",
+            )
+            print(f"[+] hook_socket.c: hardcoded MSS (int={n_int} u32={n_u32})")
+            t2, n = re.subn(
+                r"(int mtu = sip\.ipv[46]_mtu \? sip\.ipv[46]_mtu : 1500;)",
+                r"\1\n\t\t\tif (mtu < 1500)\n\t\t\t\tmtu = 1500;",
+                t,
+            )
+            if n:
+                t = t2
+                print(f"[+] hook_socket.c: floored {n} IP_MTU value(s)")
+            hook.write_text(t)
+
+            # --- 2) udp.c stub ---
             udp_c = k / "net/ipv4/udp.c"
             c = udp_c.read_text()
-            
+
             def inject_cases(src, fn, set_not_get):
                 m = re.search(rf"\b{fn}\s*\(", src)
                 if not m:
@@ -260,7 +299,6 @@ jobs:
                 if "case UDP_SEGMENT:" in body:
                     print(f"[=] {fn}: UDP_SEGMENT already present")
                     return src
-                
                 if set_not_get:
                     block = (
                         "\n#ifndef UDP_SEGMENT\n"
@@ -291,7 +329,6 @@ jobs:
                         "\t\tval = 0;\n"
                         "\t\tbreak;"
                     )
-                    
                 body2, n = re.subn(r"(\n\tdefault:\n\t\terr = -ENOPROTOOPT;)", block + r"\1", body, count=1)
                 if n != 1:
                     body2, n = re.subn(r"(\n\tdefault:\n\t\treturn -ENOPROTOOPT;)", block + r"\1", body, count=1)
@@ -300,25 +337,26 @@ jobs:
                     return src
                 print(f"[+] {fn}: stubbed UDP_SEGMENT")
                 return src[:start] + body2 + src[start+9000:]
-            
+
             c = inject_cases(c, "udp_lib_setsockopt", True)
             c = inject_cases(c, "udp_lib_getsockopt", False)
             udp_c.write_text(c)
-            
-            # --- 3) setsockopt hook insert kaçtıysa net/socket.c'ye bas ---
+
+            # --- 3) __sys_setsockopt PRE + __sys_getsockopt POST ---
+            # Bu ağaçta SYSCALL_DEFINE5 sadece wrapper: return __sys_getsockopt(...)
             sock_c = k / "net/socket.c"
             s = sock_c.read_text()
-            if "vpnhide_setsockopt_sock" in s:
-                print("[=] net/socket.c already has vpnhide_setsockopt_sock")
+
+            span = fn_span(s, r"static int __sys_setsockopt\s*\(")
+            if not span:
+                span = fn_span(s, r"SYSCALL_DEFINE5\(\s*(?:SYSC_)?setsockopt\b")
+            if not span:
+                sys.exit("setsockopt implementation not found")
+            a, b = span
+            body = s[a:b]
+            if "vpnhide_setsockopt_sock" in body:
+                print("[=] __sys_setsockopt already has vpnhide_setsockopt_sock")
             else:
-                needle = "\tif (sock != NULL) {"
-                m = re.search(r"SYSCALL_DEFINE5\(\s*(?:SYSC_)?setsockopt\b.*?\)\s*\{", s, re.S)
-                if not m:
-                    m = re.search(r"\nSYSCALL_DEFINE5\(setsockopt,", s)
-                if not m:
-                    sys.exit("setsockopt syscall not found in net/socket.c")
-                fn_start = m.start()
-                window = s[fn_start:fn_start+2500]
                 insert = (
                     "\n#ifdef CONFIG_VPNHIDE\n"
                     "\t\t{\n"
@@ -330,71 +368,113 @@ jobs:
                     "\t\t}\n"
                     "#endif\n"
                 )
-                if needle in window:
-                    window2 = window.replace(needle, needle + insert, 1)
-                elif "if (!sock)" in window or "if (sock ==" in window:
-                    window2, n = re.subn(
-                        r"(if\s*\(\s*!sock[^\)]*\)\s*\{?\s*return\s+-EBADF;\s*\}?)",
-                        r"\1" + insert,
-                        window,
-                        count=1,
-                    )
-                    if n != 1:
-                        sys.exit("could not find sock lookup in setsockopt")
+                if "\tif (sock != NULL) {" in body:
+                    body2 = body.replace("\tif (sock != NULL) {", "\tif (sock != NULL) {" + insert, 1)
+                    s = s[:a] + body2 + s[b:]
+                    print("[+] __sys_setsockopt: injected vpnhide_setsockopt_sock")
                 else:
-                    sys.exit("could not find insert point in setsockopt")
-                sock_c.write_text(s[:fn_start] + window2 + s[fn_start+2500:])
-                print("[+] net/socket.c: injected vpnhide_setsockopt_sock")
-            
-            # --- 4) TCP_MAXSEG ve TCP_INFO MSS Spoof (VPN Tespiti Atlama) ---
-            tcp_c_path = k / "net/ipv4/tcp.c"
-            if not tcp_c_path.exists():
-                sys.exit(f"File not found: {tcp_c_path}")
-            
-            tcpc = tcp_c_path.read_text()
-            
-            # Daha basit ve genel bir arama: "case TCP_MAXSEG:" bul ve değiştir
-            if "VPNHide TCP_MAXSEG spoof" not in tcpc:
-                tcpc, n = re.subn(
-                    r"(case\s+TCP_MAXSEG\s*:.*?)(break\s*;|return\s+[^;]+;)",
-                    r"\1\n\t\t/* VPNHide TCP_MAXSEG spoof */\n\t\tif (val > 0 && val < 1400) val = 1460;\n\t\t\2",
-                    tcpc,
-                    count=1,
-                    flags=re.S
-                )
-                if n > 0:
-                    print(f"[+] tcp.c: TCP_MAXSEG spoof injected ({n} occurrences)")
-                else:
-                    print("[!] tcp.c: Failed to inject TCP_MAXSEG spoof - 'case TCP_MAXSEG:' not found or doesn't match")
-            
-            # Daha basit ve genel bir arama: "tcpi_rcv_mss =" bul ve altına ekle
-            if "VPNHide TCP_INFO spoof" not in tcpc:
-                tcpc, n = re.subn(
-                    r"(\binfo->tcpi_rcv_mss\s*=[^;]+;)",
-                    r"\1\n\t/* VPNHide TCP_INFO spoof */\n\tif (info->tcpi_snd_mss > 0 && info->tcpi_snd_mss < 1400) info->tcpi_snd_mss = 1460;\n\tif (info->tcpi_rcv_mss > 0 && info->tcpi_rcv_mss < 1400) info->tcpi_rcv_mss = 1460;",
-                    tcpc,
-                    count=1
-                )
-                if n > 0:
-                    print(f"[+] tcp.c: TCP_INFO spoof injected ({n} occurrences)")
-                else:
-                    print("[!] tcp.c: Failed to inject TCP_INFO spoof - 'info->tcpi_rcv_mss =' not found")
-            
-            tcp_c_path.write_text(tcpc)
-            print("[+] VPNHide Fingerprint fixes done")
+                    sys.exit("could not find sock lookup in setsockopt")
 
+            span = fn_span(s, r"static int __sys_getsockopt\s*\(")
+            if not span:
+                span = fn_span(s, r"SYSCALL_DEFINE5\(\s*(?:SYSC_)?getsockopt\b")
+            if not span:
+                sys.exit("getsockopt implementation not found")
+            a, b = span
+            body = s[a:b]
+            if "vpnhide_getsockopt(" in body:
+                print("[=] __sys_getsockopt already has vpnhide_getsockopt")
+            else:
+                insert = (
+                    "\n#ifdef CONFIG_VPNHIDE\n"
+                    "\t\tif (!err)\n"
+                    "\t\t\tvpnhide_getsockopt(sock, level, optname, optval, optlen, &err);\n"
+                    "#endif\n"
+                )
+                body2, n = re.subn(r"(\n\tout_put:)", insert + r"\1", body, count=1)
+                if n != 1:
+                    sys.exit("could not find out_put in __sys_getsockopt")
+                s = s[:a] + body2 + s[b:]
+                print("[+] __sys_getsockopt: injected vpnhide_getsockopt POST (after BPF)")
+            sock_c.write_text(s)
+
+            # --- 4) tcp.c — SADECE do_tcp_getsockopt (setsockopt case'ine DOKUNMA) ---
+            tcp_c_path = k / "net/ipv4/tcp.c"
+            tcpc = tcp_c_path.read_text()
+
+            span = fn_span(tcpc, r"(?:static\s+)?int\s+do_tcp_getsockopt\s*\(")
+            if not span:
+                sys.exit("do_tcp_getsockopt not found")
+            a, b = span
+            body = tcpc[a:b]
+
+            if "VPNHide TCP_MAXSEG spoof" in body:
+                print("[=] do_tcp_getsockopt: TCP_MAXSEG spoof already present")
+                body2, n = body, 1
+            else:
+                # Unique: val = tp->mss_cache sadece GET tarafında var
+                body2, n = re.subn(
+                    r"(case\s+TCP_MAXSEG\s*:\s*val\s*=\s*tp->mss_cache;.*?mss_clamp;\s*)(break\s*;)",
+                    r"\1\n\t\t/* VPNHide TCP_MAXSEG spoof */\n"
+                    r"\t\tif (val < 1400)\n"
+                    r"\t\t\tval = 1460;\n"
+                    r"\t\t\2",
+                    body, count=1, flags=re.S,
+                )
+                if n != 1:
+                    print("[!] TCP_MAXSEG get-case not matched, dump:")
+                    print(body[:1800])
+                    sys.exit("do_tcp_getsockopt TCP_MAXSEG patch failed")
+                print("[+] do_tcp_getsockopt: TCP_MAXSEG spoof (mss_cache path, NOT setsockopt)")
+
+            if "VPNHide TCP_INFO spoof" in body2:
+                print("[=] do_tcp_getsockopt: TCP_INFO spoof already present")
+            else:
+                body3, n = re.subn(
+                    r"(tcp_get_info\s*\(\s*sk\s*,\s*&info\s*\)\s*;)",
+                    r"\1\n"
+                    r"\t\t/* VPNHide TCP_INFO spoof */\n"
+                    r"\t\tif (info.tcpi_snd_mss < 1400)\n"
+                    r"\t\t\tinfo.tcpi_snd_mss = 1460;\n"
+                    r"\t\tif (info.tcpi_rcv_mss < 1400)\n"
+                    r"\t\t\tinfo.tcpi_rcv_mss = 1460;\n"
+                    r"\t\tif (info.tcpi_advmss < 1400)\n"
+                    r"\t\t\tinfo.tcpi_advmss = 1460;\n"
+                    r"\t\tif (info.tcpi_pmtu && info.tcpi_pmtu < 1500)\n"
+                    r"\t\t\tinfo.tcpi_pmtu = 1500;",
+                    body2, count=1,
+                )
+                if n != 1:
+                    print("[!] tcp_get_info() call not found in do_tcp_getsockopt")
+                    sys.exit("TCP_INFO patch failed")
+                body2 = body3
+                print("[+] do_tcp_getsockopt: TCP_INFO spoof after tcp_get_info()")
+
+            tcpc = tcpc[:a] + body2 + tcpc[b:]
+            tcp_c_path.write_text(tcpc)
+
+            # doğrulama: spoof GET'te mi, SET'te mi?
+            span_set = fn_span(tcpc, r"(?:static\s+)?int\s+do_tcp_setsockopt\s*\(")
+            span_get = fn_span(tcpc, r"(?:static\s+)?int\s+do_tcp_getsockopt\s*\(")
+            print("[*] spoof in SETSOCKOPT (should be False):",
+                  span_set is not None and "VPNHide TCP_MAXSEG spoof" in tcpc[span_set[0]:span_set[1]])
+            print("[*] spoof in GETSOCKOPT (must be True):",
+                  span_get is not None and "VPNHide TCP_MAXSEG spoof" in tcpc[span_get[0]:span_get[1]])
+            print("[*] TCP_INFO spoof:", "VPNHide TCP_INFO spoof" in tcpc)
+            print("[*] vpnhide_getsockopt in socket.c:", "vpnhide_getsockopt(" in sock_c.read_text())
+            print("[+] VPNHide Fingerprint fixes done")
           PATCH_SCRIPT_2: |
             import re, sys
             from pathlib import Path
-            
+
             k = Path(".")
-            
+
             def must(p):
                 p = Path(p)
                 if not p.exists():
                     sys.exit(f"missing {p}")
                 return p
-            
+
             def sub_once(path, pat, repl, flags=0, label=""):
                 p = must(path)
                 t = p.read_text()
@@ -403,7 +483,7 @@ jobs:
                     sys.exit(f"patch failed: {path} ({label or pat[:60]!r})")
                 p.write_text(t2)
                 print(f"[+] {path}: {label}")
-            
+
             def append_to_struct_safe(struct_name, field_code, candidate_files):
                 for path in candidate_files:
                     p = Path(path)
@@ -429,12 +509,12 @@ jobs:
                         print(f"[+] {path}: {struct_name} modified")
                         return
                 sys.exit(f"patch failed: struct {struct_name} not found in {candidate_files}")
-            
+
             skbuff = must("include/linux/skbuff.h").read_text()
             if "SKB_GSO_UDP_L4" in skbuff and "gso_size" in must("net/ipv4/udp.c").read_text():
                 print("[=] UDP GSO TX already present, skip")
                 sys.exit(0)
-            
+
             # gso_type maskesi 4.14 kernelde sadece 16-bittir.
             # IPXIP4 alias'ı kullanılıyor (1 << 9).
             if "SKB_GSO_UDP_L4" not in skbuff:
@@ -444,7 +524,7 @@ jobs:
                     r"\1\n\tSKB_GSO_UDP_L4 = 1 << 9,",
                     label="SKB_GSO_UDP_L4 alias"
                 )
-            
+
             nf = must("include/linux/netdev_features.h").read_text()
             if "NETIF_F_GSO_UDP_L4" not in nf:
                 sub_once(
@@ -453,10 +533,10 @@ jobs:
                     r"\1#define NETIF_F_GSO_UDP_L4\t0\n",
                     label="NETIF_F_GSO_UDP_L4 define"
                 )
-            
+
             append_to_struct_safe("udp_sock", "\t__u16 gso_size;", ["include/linux/udp.h", "include/net/udp.h"])
             append_to_struct_safe("inet_cork", "\t__u16 gso_size;", ["include/net/inet_sock.h"])
-            
+
             udp = must("net/ipv4/udp.c").read_text()
             if "up->gso_size" not in udp:
                 if "case UDP_SEGMENT:" in udp:
@@ -482,7 +562,7 @@ jobs:
                         "case UDP_SEGMENT:\n\t\tval = up->gso_size;\n\t\tbreak;",
                         label="getsockopt gso_size",
                     )
-            
+
                 send_repl = (
                     r"\1"
                     "\tif (udp_sk(sk)->gso_size) {\n"
@@ -500,14 +580,14 @@ jobs:
                     "\t}\n\n"
                     "send:"
                 )
-            
+
                 sub_once(
                     "net/ipv4/udp.c",
                     r"(static int udp_send_skb\([\s\S]*?uh->check = CSUM_MANGLED_0;\s*)send:",
                     send_repl,
                     label="udp_send_skb GSO",
                 )
-            
+
             off = must("net/ipv4/udp_offload.c").read_text()
             if "__udp_gso_segment" not in off:
                 helper = (
@@ -536,14 +616,14 @@ jobs:
                     "}\n\n"
                     r"\1"
                 )
-            
+
                 sub_once(
                     "net/ipv4/udp_offload.c",
                     r"(static struct sk_buff \*udp4_ufo_fragment\()",
                     helper,
                     label="insert __udp_gso_segment",
                 )
-            
+
                 off2 = Path("net/ipv4/udp_offload.c").read_text()
                 if "SKB_GSO_UDP_L4" not in off2.split("udp4_ufo_fragment")[1][:800]:
                     sub_once(
@@ -552,20 +632,20 @@ jobs:
                         "if (!(skb_shinfo(skb)->gso_type & (SKB_GSO_UDP | SKB_GSO_UDP_L4)))",
                         label="ufo_fragment accept UDP_L4",
                     )
-                    
+
                     branch_repl = (
                         r"\1"
                         "\tif (skb_shinfo(skb)->gso_type & SKB_GSO_UDP_L4)\n"
                         "\t\treturn __udp_gso_segment(skb, features);\n\n"
                     )
-                    
+
                     sub_once(
                         "net/ipv4/udp_offload.c",
                         r"(if \(!pskb_may_pull\(skb, sizeof\(struct udphdr\)\)\)\s*goto out;\s*)",
                         branch_repl,
                         label="branch to __udp_gso_segment",
                     )
-            
+
             print("[+] software UDP GSO TX patched")
 
         run: |
