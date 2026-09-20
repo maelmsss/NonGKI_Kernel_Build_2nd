@@ -209,6 +209,7 @@ jobs:
             
             k = Path(".")
             
+            # --- 1) hook_socket.c: 4.18 guard'ını kaldır, gso_size yazma ---
             hook = k / "security/vpnhide/hook_socket.c"
             if not hook.exists():
                 sys.exit("missing security/vpnhide/hook_socket.c — apply.sh failed")
@@ -245,6 +246,7 @@ jobs:
             else:
                 print("[=] hook_socket.c already without 4.18 UDP_SEGMENT guard")
             
+            # --- 2) uapi: UDP_SEGMENT / UDP_GRO ---
             udp_h = k / "include/uapi/linux/udp.h"
             if not udp_h.exists():
                 udp_h = k / "include/linux/udp.h"
@@ -263,18 +265,9 @@ jobs:
             else:
                 print(f"[=] {udp_h}: UDP_SEGMENT already present")
             
+            # --- 3) udp.c stub: ENOPROTOOPT yerine success ---
             udp_c = k / "net/ipv4/udp.c"
             c = udp_c.read_text()
-            
-            if "UDP_SEGMENT 103" not in c:
-                c = (
-                    "#ifndef UDP_SEGMENT\n"
-                    "#define UDP_SEGMENT\t103\n"
-                    "#endif\n"
-                    "#ifndef UDP_GRO\n"
-                    "#define UDP_GRO\t\t104\n"
-                    "#endif\n\n"
-                ) + c
             
             def inject_cases(src, fn, set_not_get):
                 m = re.search(rf"\n[^\n]*\b{fn}\s*\(", src)
@@ -286,29 +279,37 @@ jobs:
                 if "case UDP_SEGMENT:" in body:
                     print(f"[=] {fn}: UDP_SEGMENT already present")
                     return src
-                
                 if set_not_get:
-                    block = (
-                        "\n\tcase UDP_SEGMENT:\n"
-                        "\t\tif (val < 0 || val > 0xFFFF)\n"
-                        "\t\t\treturn -EINVAL;\n"
-                        "\t\tbreak;\n"
-                        "\tcase UDP_GRO:\n"
-                        "\t\tbreak;"
-                    )
+                    block = """
+            \tcase UDP_SEGMENT:
+            \t\tif (val < 0 || val > 0xFFFF)
+            \t\t\treturn -EINVAL;
+            \t\tbreak;
+            \tcase UDP_GRO:
+            \t\tbreak;
+            """
                 else:
-                    block = (
-                        "\n\tcase UDP_SEGMENT:\n"
-                        "\t\tval = 0;\n"
-                        "\t\tbreak;\n"
-                        "\tcase UDP_GRO:\n"
-                        "\t\tval = 0;\n"
-                        "\t\tbreak;"
-                    )
-                    
-                body2, n = re.subn(r"(\n\tdefault:\n\t\terr = -ENOPROTOOPT;)", block + r"\1", body, count=1)
+                    block = """
+            \tcase UDP_SEGMENT:
+            \t\tval = 0;
+            \t\tbreak;
+            \tcase UDP_GRO:
+            \t\tval = 0;
+            \t\tbreak;
+            """
+                body2, n = re.subn(
+                    r"(\n\tdefault:\n\t\terr = -ENOPROTOOPT;)",
+                    block + r"\1",
+                    body,
+                    count=1,
+                )
                 if n != 1:
-                    body2, n = re.subn(r"(\n\tdefault:\n\t\treturn -ENOPROTOOPT;)", block + r"\1", body, count=1)
+                    body2, n = re.subn(
+                        r"(\n\tdefault:\n\t\treturn -ENOPROTOOPT;)",
+                        block + r"\1",
+                        body,
+                        count=1,
+                    )
                 if n != 1:
                     print(f"[!] {fn}: default ENOPROTOOPT not found, skip")
                     return src
@@ -319,6 +320,7 @@ jobs:
             c = inject_cases(c, "udp_lib_getsockopt", False)
             udp_c.write_text(c)
             
+            # --- 4) setsockopt hook insert kaçtıysa net/socket.c'ye bas ---
             sock_c = k / "net/socket.c"
             s = sock_c.read_text()
             if "vpnhide_setsockopt_sock" in s:
@@ -330,37 +332,80 @@ jobs:
                     m = re.search(r"\nSYSCALL_DEFINE5\(setsockopt,", s)
                 if not m:
                     sys.exit("setsockopt syscall not found in net/socket.c")
-                    
                 fn_start = m.start()
                 window = s[fn_start:fn_start+2500]
-                insert_code = (
-                    "\n#ifdef CONFIG_VPNHIDE\n"
-                    "\t\t{\n"
-                    "\t\t\tint _vret = vpnhide_setsockopt_sock(sock, level, optname, optval, optlen);\n"
-                    "\t\t\tif (_vret) {\n"
-                    "\t\t\t\terr = (_vret > 0) ? 0 : _vret;\n"
-                    "\t\t\t\tgoto out_put;\n"
-                    "\t\t\t}\n"
-                    "\t\t}\n"
-                    "#endif\n"
-                )
-                
+                insert = """
+            #ifdef CONFIG_VPNHIDE
+            \t\t{
+            \t\t\tint _vret = vpnhide_setsockopt_sock(sock, level, optname, optval, optlen);
+            \t\t\tif (_vret) {
+            \t\t\t\terr = (_vret > 0) ? 0 : _vret;
+            \t\t\t\tgoto out_put;
+            \t\t\t}
+            \t\t}
+            #endif
+            """
                 if needle in window:
-                    window2 = window.replace(needle, needle + insert_code, 1)
+                    window2 = window.replace(needle, needle + insert, 1)
                 elif "if (!sock)" in window or "if (sock ==" in window:
                     window2, n = re.subn(
                         r"(if\s*\(\s*!sock[^\)]*\)\s*\{?\s*return\s+-EBADF;\s*\}?)",
-                        r"\1" + insert_code, window, count=1
+                        r"\1" + insert,
+                        window,
+                        count=1,
                     )
                     if n != 1:
                         sys.exit("could not find sock lookup in setsockopt")
                 else:
                     sys.exit("could not find insert point in setsockopt")
-                    
                 sock_c.write_text(s[:fn_start] + window2 + s[fn_start+2500:])
                 print("[+] net/socket.c: injected vpnhide_setsockopt_sock")
             
-            print("[+] UDP_SEGMENT 4.14 fix done")
+            # --- 5) TCP_MAXSEG ve TCP_INFO MSS Spoof (VPN Tespiti Atlama) ---
+            tcp_c_path = k / "net/ipv4/tcp.c"
+            if tcp_c_path.exists():
+                tcpc = tcp_c_path.read_text()
+                
+                # TCP_MAXSEG spoof: getsockopt TCP_MAXSEG cagrildiginda donen degeri sahtele
+                if "VPNHide TCP_MAXSEG spoof" not in tcpc:
+                    tcpc, n = re.subn(
+                        r"(case TCP_MAXSEG:.*?)(\n\s*if\s*\(\s*put_user\s*\(\s*len\s*,)",
+                        r"\1\n\t\t/* VPNHide TCP_MAXSEG spoof */\n\t\tif (val > 0 && val < 1400) val = 1460;\2",
+                        tcpc,
+                        count=1,
+                        flags=re.S
+                    )
+                    # Bazı 4.14 kernel kodlarındaki alternatif yazım tarzı için fallback
+                    if n != 1:
+                        tcpc, n = re.subn(
+                            r"(case TCP_MAXSEG:.*?)(\n\s*return put_user)",
+                            r"\1\n\t\t/* VPNHide TCP_MAXSEG spoof */\n\t\tif (val > 0 && val < 1400) val = 1460;\2",
+                            tcpc,
+                            count=1,
+                            flags=re.S
+                        )
+                    if n == 1:
+                        print("[+] tcp.c: TCP_MAXSEG spoof injected")
+                    else:
+                        print("[!] tcp.c: Failed to inject TCP_MAXSEG spoof")
+
+                # TCP_INFO spoof: tcp_get_info() ile donen netlink/diag bilgilerini sahtele
+                if "VPNHide TCP_INFO spoof" not in tcpc:
+                    tcpc, n = re.subn(
+                        r"(void tcp_get_info\([^)]+\)\n\{.*?)(^\})",
+                        r"\1\t/* VPNHide TCP_INFO spoof */\n\tif (info->tcpi_snd_mss > 0 && info->tcpi_snd_mss < 1400) info->tcpi_snd_mss = 1460;\n\tif (info->tcpi_rcv_mss > 0 && info->tcpi_rcv_mss < 1400) info->tcpi_rcv_mss = 1460;\n\2",
+                        tcpc,
+                        count=1,
+                        flags=re.S | re.MULTILINE
+                    )
+                    if n == 1:
+                        print("[+] tcp.c: TCP_INFO spoof injected")
+                    else:
+                        print("[!] tcp.c: Failed to inject TCP_INFO spoof")
+
+                tcp_c_path.write_text(tcpc)
+
+            print("[+] VPNHide Fingerprint fixes done")
 
           PATCH_SCRIPT_2: |
             import re, sys
@@ -388,7 +433,9 @@ jobs:
                     p = Path(path)
                     if not p.exists(): continue
                     t = p.read_text()
+                    # Yorum bloklarını geçici olarak maskele (süslü parantez sayımını bozmaması için)
                     t_mask = re.sub(r'/\*.*?\*/|//[^\n]*', lambda m: ' ' * len(m.group(0)), t, flags=re.S)
+                    
                     m = re.search(r"\bstruct\s+" + struct_name + r"\s*\{", t_mask)
                     if m:
                         if field_code.strip() in t:
@@ -402,7 +449,8 @@ jobs:
                             idx += 1
                         if braces != 0:
                             sys.exit(f"patch failed: {path} (brace mismatch in {struct_name})")
-                        idx -= 1
+                            
+                        idx -= 1  # Kapatan süslü parantezin tam üstüne yaz
                         t2 = t[:idx] + field_code + "\n" + t[idx:]
                         p.write_text(t2)
                         print(f"[+] {path}: {struct_name} modified")
