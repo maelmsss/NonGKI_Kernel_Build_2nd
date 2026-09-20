@@ -398,11 +398,11 @@ jobs:
                 p.write_text(t2)
                 print(f"[+] {path}: {struct_name} modified")
             
-            udp_h_net = must("include/net/udp.h").read_text()
+            udp_h_linux = must("include/linux/udp.h").read_text()
             skbuff = must("include/linux/skbuff.h").read_text()
             
             if (
-                "gso_size;" in udp_h_net and 
+                "gso_size;" in udp_h_linux and 
                 "SKB_GSO_UDP_L4" in skbuff and 
                 "SKB_GSO_UDP_L4" in must("net/ipv4/udp_offload.c").read_text() and 
                 "gso_size" in must("net/ipv4/udp.c").read_text()
@@ -444,8 +444,9 @@ jobs:
                     label="GSO_UDP_L4 bit enum",
                 )
             
-            if "gso_size" not in udp_h_net:
-                append_to_struct("include/net/udp.h", "udp_sock", "\t__u16 gso_size;")
+            # include/linux/udp.h icerisindeki udp_sock struct'ina ekle
+            if "gso_size" not in udp_h_linux:
+                append_to_struct("include/linux/udp.h", "udp_sock", "\t__u16 gso_size;")
             
             cork = must("include/net/inet_sock.h").read_text()
             if "gso_size" not in cork:
@@ -456,7 +457,7 @@ jobs:
                 if "case UDP_SEGMENT:" in udp:
                     sub_once(
                         "net/ipv4/udp.c",
-                        r"case UDP_SEGMENT:\n\t\tif \(val < 0 \|\| val > 0xFFFF\)\n\t\t\treturn -EINVAL;\n\t\tbreak;",
+                        r"case UDP_SEGMENT:\s*if \(val < 0 \|\| val > 0xFFFF\)\s*return -EINVAL;\s*break;",
                         (
                             "case UDP_SEGMENT:\n"
                             "\t\tif (val < 0 || val > 0xFFFF)\n"
@@ -472,7 +473,7 @@ jobs:
                 ):
                     sub_once(
                         "net/ipv4/udp.c",
-                        r"(case UDP_SEGMENT:\n\t\tval = 0;\n\t\tbreak;)",
+                        r"(case UDP_SEGMENT:\s*val = 0;\s*break;)",
                         "case UDP_SEGMENT:\n\t\tval = up->gso_size;\n\t\tbreak;",
                         label="getsockopt gso_size",
                     )
@@ -497,7 +498,7 @@ jobs:
             
                 sub_once(
                     "net/ipv4/udp.c",
-                    r"(static int udp_send_skb\([\s\S]*?uh->check = CSUM_MANGLED_0;\n\n)send:",
+                    r"(static int udp_send_skb\([\s\S]*?uh->check = CSUM_MANGLED_0;\s*)send:",
                     send_repl,
                     label="udp_send_skb GSO",
                 )
@@ -550,12 +551,12 @@ jobs:
                     branch_repl = (
                         r"\1"
                         "\tif (skb_shinfo(skb)->gso_type & SKB_GSO_UDP_L4)\n"
-                        "\t\treturn __udp_gso_segment(skb, features);\n"
+                        "\t\treturn __udp_gso_segment(skb, features);\n\n"
                     )
                     
                     sub_once(
                         "net/ipv4/udp_offload.c",
-                        r"(if \(!pskb_may_pull\(skb, sizeof\(struct udphdr\)\)\)\n\t\tgoto out;\n)",
+                        r"(if \(!pskb_may_pull\(skb, sizeof\(struct udphdr\)\)\)\s*goto out;\s*)",
                         branch_repl,
                         label="branch to __udp_gso_segment",
                     )
