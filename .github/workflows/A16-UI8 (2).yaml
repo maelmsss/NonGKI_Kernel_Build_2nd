@@ -373,6 +373,31 @@ jobs:
                 p.write_text(t2)
                 print(f"[+] {path}: {label}")
             
+            def append_to_struct(path, struct_name, field_code):
+                p = must(path)
+                t = p.read_text()
+                # Yorum bloklarını geçici olarak boşlukla değiştir, böylece içlerindeki süslü parantezler sayımı bozmaz
+                t_mask = re.sub(r'/\*.*?\*/|//[^\n]*', lambda m: ' ' * len(m.group(0)), t, flags=re.S)
+                
+                m = re.search(r"\bstruct\s+" + struct_name + r"\s*\{", t_mask)
+                if not m:
+                    sys.exit(f"patch failed: {path} (struct {struct_name} not found)")
+                    
+                braces = 1
+                idx = m.end()
+                while idx < len(t_mask) and braces > 0:
+                    if t_mask[idx] == '{': braces += 1
+                    elif t_mask[idx] == '}': braces -= 1
+                    idx += 1
+                    
+                if braces != 0:
+                    sys.exit(f"patch failed: {path} (brace mismatch in {struct_name})")
+                    
+                idx -= 1  # Kapatan süslü parantezin tam üstüne yaz
+                t2 = t[:idx] + field_code + "\n" + t[idx:]
+                p.write_text(t2)
+                print(f"[+] {path}: {struct_name} modified")
+            
             udp_h_net = must("include/net/udp.h").read_text()
             skbuff = must("include/linux/skbuff.h").read_text()
             
@@ -420,23 +445,11 @@ jobs:
                 )
             
             if "gso_size" not in udp_h_net:
-                sub_once(
-                    "include/net/udp.h",
-                    r"(struct udp_sock \{.*?)(\n\};)",
-                    r"\1\n\t__u16 gso_size;\n\2",
-                    flags=re.S,
-                    label="udp_sock.gso_size",
-                )
+                append_to_struct("include/net/udp.h", "udp_sock", "\t__u16 gso_size;")
             
             cork = must("include/net/inet_sock.h").read_text()
             if "gso_size" not in cork:
-                sub_once(
-                    "include/net/inet_sock.h",
-                    r"(struct inet_cork \{.*?)(\n\};)",
-                    r"\1\n\t__u16 gso_size;\n\2",
-                    flags=re.S,
-                    label="inet_cork.gso_size",
-                )
+                append_to_struct("include/net/inet_sock.h", "inet_cork", "\t__u16 gso_size;")
             
             udp = must("net/ipv4/udp.c").read_text()
             if "up->gso_size" not in udp:
