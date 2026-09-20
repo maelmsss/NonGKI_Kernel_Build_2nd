@@ -434,12 +434,12 @@ jobs:
                 print("[=] UDP GSO TX already present, skip")
                 sys.exit(0)
             
-            # 64-Bit Feature limitine takilmamak icin standart SCTP ozelliginin bitini alias (maske) olarak kullaniyoruz.
+            # 64-Bit Feature limitine takilmamak icin ESP (IPsec) ozelliginin bitini alias (maske) olarak kullaniyoruz.
             if "SKB_GSO_UDP_L4" not in skbuff:
                 sub_once(
                     "include/linux/skbuff.h",
                     r"(SKB_GSO_ESP\s*=\s*1\s*<<\s*\d+,)",
-                    r"\1\n\tSKB_GSO_UDP_L4 = SKB_GSO_SCTP,",
+                    r"\1\n\tSKB_GSO_UDP_L4 = SKB_GSO_ESP,",
                     label="SKB_GSO_UDP_L4 alias"
                 )
             
@@ -448,7 +448,7 @@ jobs:
                 sub_once(
                     "include/linux/netdev_features.h",
                     r"(#define NETIF_F_GSO_ESP\s+.*\n)",
-                    r"\1#define NETIF_F_GSO_UDP_L4\tNETIF_F_GSO_SCTP\n",
+                    r"\1#define NETIF_F_GSO_UDP_L4\tNETIF_F_GSO_ESP\n",
                     label="NETIF_F_GSO_UDP_L4 define"
                 )
                 t = Path("include/linux/netdev_features.h").read_text()
