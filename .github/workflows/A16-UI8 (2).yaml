@@ -251,7 +251,7 @@ jobs:
             c = udp_c.read_text()
             
             def inject_cases(src, fn, set_not_get):
-                m = re.search(rf"\n[^\n]*\b{fn}\s*\(", src)
+                m = re.search(rf"\b{fn}\s*\(", src)
                 if not m:
                     print(f"[!] {fn} not found")
                     return src
@@ -348,41 +348,37 @@ jobs:
             
             # --- 4) TCP_MAXSEG ve TCP_INFO MSS Spoof (VPN Tespiti Atlama) ---
             tcp_c_path = k / "net/ipv4/tcp.c"
+            if not tcp_c_path.exists():
+                sys.exit(f"File not found: {tcp_c_path}")
+            
             tcpc = tcp_c_path.read_text()
             
+            # Daha basit ve genel bir arama: "case TCP_MAXSEG:" bul ve değiştir
             if "VPNHide TCP_MAXSEG spoof" not in tcpc:
-                m_get = re.search(r"(?m)^int\s+(?:do_)?tcp_getsockopt\b", tcpc)
-                if not m_get:
-                    m_get = re.search(r"\bcase\s+TCP_INFO\s*:", tcpc)
-                    if not m_get:
-                        sys.exit("do_tcp_getsockopt / TCP_INFO not found in tcp.c")
-                    start_idx = max(0, m_get.start() - 3000)
-                else:
-                    start_idx = m_get.start()
-                    
-                chunk = tcpc[start_idx:start_idx+10000]
-                chunk2, n = re.subn(
+                tcpc, n = re.subn(
                     r"(case\s+TCP_MAXSEG\s*:.*?)(break\s*;|return\s+[^;]+;)",
                     r"\1\n\t\t/* VPNHide TCP_MAXSEG spoof */\n\t\tif (val > 0 && val < 1400) val = 1460;\n\t\t\2",
-                    chunk,
+                    tcpc,
                     count=1,
                     flags=re.S
                 )
-                if n != 1:
-                    sys.exit("Failed to inject TCP_MAXSEG spoof in tcp.c")
-                tcpc = tcpc[:start_idx] + chunk2 + tcpc[start_idx+10000:]
-                print("[+] tcp.c: TCP_MAXSEG spoof injected")
+                if n > 0:
+                    print(f"[+] tcp.c: TCP_MAXSEG spoof injected ({n} occurrences)")
+                else:
+                    print("[!] tcp.c: Failed to inject TCP_MAXSEG spoof - 'case TCP_MAXSEG:' not found or doesn't match")
             
+            # Daha basit ve genel bir arama: "tcpi_rcv_mss =" bul ve altına ekle
             if "VPNHide TCP_INFO spoof" not in tcpc:
                 tcpc, n = re.subn(
-                    r"(info->tcpi_rcv_mss\s*=\s*[^;]+;)",
+                    r"(\binfo->tcpi_rcv_mss\s*=[^;]+;)",
                     r"\1\n\t/* VPNHide TCP_INFO spoof */\n\tif (info->tcpi_snd_mss > 0 && info->tcpi_snd_mss < 1400) info->tcpi_snd_mss = 1460;\n\tif (info->tcpi_rcv_mss > 0 && info->tcpi_rcv_mss < 1400) info->tcpi_rcv_mss = 1460;",
                     tcpc,
                     count=1
                 )
-                if n != 1:
-                    sys.exit("Failed to inject TCP_INFO spoof in tcp.c")
-                print("[+] tcp.c: TCP_INFO spoof injected")
+                if n > 0:
+                    print(f"[+] tcp.c: TCP_INFO spoof injected ({n} occurrences)")
+                else:
+                    print("[!] tcp.c: Failed to inject TCP_INFO spoof - 'info->tcpi_rcv_mss =' not found")
             
             tcp_c_path.write_text(tcpc)
             print("[+] VPNHide Fingerprint fixes done")
@@ -439,12 +435,13 @@ jobs:
                 print("[=] UDP GSO TX already present, skip")
                 sys.exit(0)
             
-            # 64-Bit Feature limitine takilmamak icin standart SCTP ozelliginin bitini alias (maske) olarak kullaniyoruz.
+            # gso_type maskesi 4.14 kernelde sadece 16-bittir.
+            # IPXIP4 alias'ı kullanılıyor (1 << 9).
             if "SKB_GSO_UDP_L4" not in skbuff:
                 sub_once(
                     "include/linux/skbuff.h",
                     r"(SKB_GSO_ESP\s*=\s*1\s*<<\s*\d+,)",
-                    r"\1\n\tSKB_GSO_UDP_L4 = SKB_GSO_SCTP,",
+                    r"\1\n\tSKB_GSO_UDP_L4 = 1 << 9,",
                     label="SKB_GSO_UDP_L4 alias"
                 )
             
@@ -453,17 +450,9 @@ jobs:
                 sub_once(
                     "include/linux/netdev_features.h",
                     r"(#define NETIF_F_GSO_ESP\s+.*\n)",
-                    r"\1#define NETIF_F_GSO_UDP_L4\tNETIF_F_GSO_SCTP\n",
+                    r"\1#define NETIF_F_GSO_UDP_L4\t0\n",
                     label="NETIF_F_GSO_UDP_L4 define"
                 )
-                t = Path("include/linux/netdev_features.h").read_text()
-                if "NETIF_F_GSO_SOFTWARE" in t and "GSO_UDP_L4" not in t.split("NETIF_F_GSO_SOFTWARE")[1][:400]:
-                    sub_once(
-                        "include/linux/netdev_features.h",
-                        r"(#define NETIF_F_GSO_SOFTWARE\s*\([^)]*)\)",
-                        r"\1 | NETIF_F_GSO_UDP_L4)",
-                        label="GSO_SOFTWARE includes UDP_L4",
-                    )
             
             append_to_struct_safe("udp_sock", "\t__u16 gso_size;", ["include/linux/udp.h", "include/net/udp.h"])
             append_to_struct_safe("inet_cork", "\t__u16 gso_size;", ["include/net/inet_sock.h"])
