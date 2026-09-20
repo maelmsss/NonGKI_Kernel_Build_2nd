@@ -261,7 +261,6 @@ jobs:
                     print(f"[=] {fn}: UDP_SEGMENT already present")
                     return src
                 
-                # Derleyici uapi udp.h'ı görmezden geldiği için makroları DOĞRUDAN switch içine gömüyoruz
                 if set_not_get:
                     block = (
                         "\n#ifndef UDP_SEGMENT\n"
@@ -349,43 +348,38 @@ jobs:
             
             # --- 4) TCP_MAXSEG ve TCP_INFO MSS Spoof (VPN Tespiti Atlama) ---
             tcp_c_path = k / "net/ipv4/tcp.c"
-            if tcp_c_path.exists():
-                tcpc = tcp_c_path.read_text()
-                
-                # TCP_MAXSEG spoof
-                m_get = re.search(r"\nint do_tcp_getsockopt\(.*?\n\{", tcpc)
-                if m_get:
-                    start_get = m_get.start()
-                    body = tcpc[start_get:start_get+8000]
-                    if "VPNHide TCP_MAXSEG spoof" not in body:
-                        body2, n = re.subn(
-                            r"(case TCP_MAXSEG:.*?)(\n\s*break;)",
-                            r"\1\n\t\t/* VPNHide TCP_MAXSEG spoof */\n\t\tif (val > 0 && val < 1400) val = 1460;\2",
-                            body,
-                            count=1,
-                            flags=re.S
-                        )
-                        if n == 1:
-                            tcpc = tcpc[:start_get] + body2 + tcpc[start_get+8000:]
-                            print("[+] tcp.c: TCP_MAXSEG spoof injected")
-                        else:
-                            print("[!] tcp.c: Failed to inject TCP_MAXSEG spoof")
-
-                # TCP_INFO spoof
-                if "VPNHide TCP_INFO spoof" not in tcpc:
-                    tcpc, n = re.subn(
-                        r"(info->tcpi_rcv_mss\s*=\s*[^;]+;)",
-                        r"\1\n\t/* VPNHide TCP_INFO spoof */\n\tif (info->tcpi_snd_mss > 0 && info->tcpi_snd_mss < 1400) info->tcpi_snd_mss = 1460;\n\tif (info->tcpi_rcv_mss > 0 && info->tcpi_rcv_mss < 1400) info->tcpi_rcv_mss = 1460;",
-                        tcpc,
-                        count=1
-                    )
-                    if n == 1:
-                        print("[+] tcp.c: TCP_INFO spoof injected")
-                    else:
-                        print("[!] tcp.c: Failed to inject TCP_INFO spoof")
-
-                tcp_c_path.write_text(tcpc)
+            tcpc = tcp_c_path.read_text()
             
+            if "VPNHide TCP_MAXSEG spoof" not in tcpc:
+                m_get = re.search(r"\nint do_tcp_getsockopt\(", tcpc)
+                if not m_get:
+                    sys.exit("do_tcp_getsockopt not found in tcp.c")
+                start_idx = m_get.start()
+                chunk = tcpc[start_idx:start_idx+10000]
+                chunk2, n = re.subn(
+                    r"(case TCP_MAXSEG:.*?)(break;)",
+                    r"\1\n\t\t/* VPNHide TCP_MAXSEG spoof */\n\t\tif (val > 0 && val < 1400) val = 1460;\n\t\t\2",
+                    chunk,
+                    count=1,
+                    flags=re.S
+                )
+                if n != 1:
+                    sys.exit("Failed to inject TCP_MAXSEG spoof in tcp.c")
+                tcpc = tcpc[:start_idx] + chunk2 + tcpc[start_idx+10000:]
+                print("[+] tcp.c: TCP_MAXSEG spoof injected")
+            
+            if "VPNHide TCP_INFO spoof" not in tcpc:
+                tcpc, n = re.subn(
+                    r"(info->tcpi_rcv_mss\s*=\s*[^;]+;)",
+                    r"\1\n\t/* VPNHide TCP_INFO spoof */\n\tif (info->tcpi_snd_mss > 0 && info->tcpi_snd_mss < 1400) info->tcpi_snd_mss = 1460;\n\tif (info->tcpi_rcv_mss > 0 && info->tcpi_rcv_mss < 1400) info->tcpi_rcv_mss = 1460;",
+                    tcpc,
+                    count=1
+                )
+                if n != 1:
+                    sys.exit("Failed to inject TCP_INFO spoof in tcp.c")
+                print("[+] tcp.c: TCP_INFO spoof injected")
+            
+            tcp_c_path.write_text(tcpc)
             print("[+] VPNHide Fingerprint fixes done")
 
           PATCH_SCRIPT_2: |
@@ -457,8 +451,15 @@ jobs:
                     r"\1#define NETIF_F_GSO_UDP_L4\tNETIF_F_GSO_SCTP\n",
                     label="NETIF_F_GSO_UDP_L4 define"
                 )
+                t = Path("include/linux/netdev_features.h").read_text()
+                if "NETIF_F_GSO_SOFTWARE" in t and "GSO_UDP_L4" not in t.split("NETIF_F_GSO_SOFTWARE")[1][:400]:
+                    sub_once(
+                        "include/linux/netdev_features.h",
+                        r"(#define NETIF_F_GSO_SOFTWARE\s*\([^)]*)\)",
+                        r"\1 | NETIF_F_GSO_UDP_L4)",
+                        label="GSO_SOFTWARE includes UDP_L4",
+                    )
             
-            # Structlara gso_size ekleme
             append_to_struct_safe("udp_sock", "\t__u16 gso_size;", ["include/linux/udp.h", "include/net/udp.h"])
             append_to_struct_safe("inet_cork", "\t__u16 gso_size;", ["include/net/inet_sock.h"])
             
