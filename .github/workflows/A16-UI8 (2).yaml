@@ -351,13 +351,18 @@ jobs:
             tcpc = tcp_c_path.read_text()
             
             if "VPNHide TCP_MAXSEG spoof" not in tcpc:
-                m_get = re.search(r"\nint do_tcp_getsockopt\(", tcpc)
+                m_get = re.search(r"(?m)^int\s+(?:do_)?tcp_getsockopt\b", tcpc)
                 if not m_get:
-                    sys.exit("do_tcp_getsockopt not found in tcp.c")
-                start_idx = m_get.start()
+                    m_get = re.search(r"\bcase\s+TCP_INFO\s*:", tcpc)
+                    if not m_get:
+                        sys.exit("do_tcp_getsockopt / TCP_INFO not found in tcp.c")
+                    start_idx = max(0, m_get.start() - 3000)
+                else:
+                    start_idx = m_get.start()
+                    
                 chunk = tcpc[start_idx:start_idx+10000]
                 chunk2, n = re.subn(
-                    r"(case TCP_MAXSEG:.*?)(break;)",
+                    r"(case\s+TCP_MAXSEG\s*:.*?)(break\s*;|return\s+[^;]+;)",
                     r"\1\n\t\t/* VPNHide TCP_MAXSEG spoof */\n\t\tif (val > 0 && val < 1400) val = 1460;\n\t\t\2",
                     chunk,
                     count=1,
@@ -434,12 +439,12 @@ jobs:
                 print("[=] UDP GSO TX already present, skip")
                 sys.exit(0)
             
-            # 64-Bit Feature limitine takilmamak icin ESP (IPsec) ozelliginin bitini alias (maske) olarak kullaniyoruz.
+            # 64-Bit Feature limitine takilmamak icin standart SCTP ozelliginin bitini alias (maske) olarak kullaniyoruz.
             if "SKB_GSO_UDP_L4" not in skbuff:
                 sub_once(
                     "include/linux/skbuff.h",
                     r"(SKB_GSO_ESP\s*=\s*1\s*<<\s*\d+,)",
-                    r"\1\n\tSKB_GSO_UDP_L4 = SKB_GSO_ESP,",
+                    r"\1\n\tSKB_GSO_UDP_L4 = SKB_GSO_SCTP,",
                     label="SKB_GSO_UDP_L4 alias"
                 )
             
@@ -448,7 +453,7 @@ jobs:
                 sub_once(
                     "include/linux/netdev_features.h",
                     r"(#define NETIF_F_GSO_ESP\s+.*\n)",
-                    r"\1#define NETIF_F_GSO_UDP_L4\tNETIF_F_GSO_ESP\n",
+                    r"\1#define NETIF_F_GSO_UDP_L4\tNETIF_F_GSO_SCTP\n",
                     label="NETIF_F_GSO_UDP_L4 define"
                 )
                 t = Path("include/linux/netdev_features.h").read_text()
