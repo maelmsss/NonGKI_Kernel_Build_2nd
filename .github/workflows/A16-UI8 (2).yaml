@@ -209,35 +209,34 @@ jobs:
             
             k = Path(".")
             
-            # --- 1) hook_socket.c: 4.18 guard'ını kaldır, gso_size yazma ---
             hook = k / "security/vpnhide/hook_socket.c"
             if not hook.exists():
                 sys.exit("missing security/vpnhide/hook_socket.c — apply.sh failed")
             t = hook.read_text()
             if "level == SOL_UDP" in t and "KERNEL_VERSION(4, 18, 0)" in t:
+                repl1 = (
+                    "#ifndef SOL_UDP\n"
+                    "#define SOL_UDP 17\n"
+                    "#endif\n"
+                    "#ifndef UDP_SEGMENT\n"
+                    "#define UDP_SEGMENT 103\n"
+                    "#endif\n"
+                    "\telse if (level == SOL_UDP) {\n"
+                    "\t\tif (optname == UDP_SEGMENT) {\n"
+                    "\t\t\tif (sk->sk_protocol != IPPROTO_UDP ||\n"
+                    "\t\t\t    sk->sk_type != SOCK_DGRAM ||\n"
+                    "\t\t\t    optlen != sizeof(int))\n"
+                    "\t\t\t\treturn 0;\n"
+                    "\t\t\tsk->sk_mark |= VH_SK_PROBE_MARK;\n"
+                    "\t\t\trecord_kmod_intercept(uid, HOOK_SETSOCKOPT);\n"
+                    "\t\t\treturn 1;\n"
+                    "\t\t}\n"
+                    "\t}"
+                )
                 t2, n = re.subn(
                     r"#if LINUX_VERSION_CODE >= KERNEL_VERSION\(4,\s*18,\s*0\)\s*"
                     r"else if \(level == SOL_UDP\) \{.*?\n#endif",
-                    """#ifndef SOL_UDP
-            #define SOL_UDP 17
-            #endif
-            #ifndef UDP_SEGMENT
-            #define UDP_SEGMENT 103
-            #endif
-            \telse if (level == SOL_UDP) {
-            \t\tif (optname == UDP_SEGMENT) {
-            \t\t\tif (sk->sk_protocol != IPPROTO_UDP ||
-            \t\t\t    sk->sk_type != SOCK_DGRAM ||
-            \t\t\t    optlen != sizeof(int))
-            \t\t\t\treturn 0;
-            \t\t\tsk->sk_mark |= VH_SK_PROBE_MARK;
-            \t\t\trecord_kmod_intercept(uid, HOOK_SETSOCKOPT);
-            \t\t\treturn 1;
-            \t\t}
-            \t}""",
-                    t,
-                    count=1,
-                    flags=re.S,
+                    repl1, t, count=1, flags=re.S
                 )
                 if n != 1:
                     sys.exit("UDP_SEGMENT #if block not matched in hook_socket.c")
@@ -246,7 +245,6 @@ jobs:
             else:
                 print("[=] hook_socket.c already without 4.18 UDP_SEGMENT guard")
             
-            # --- 2) uapi: UDP_SEGMENT / UDP_GRO ---
             udp_h = k / "include/uapi/linux/udp.h"
             if not udp_h.exists():
                 udp_h = k / "include/linux/udp.h"
@@ -265,7 +263,6 @@ jobs:
             else:
                 print(f"[=] {udp_h}: UDP_SEGMENT already present")
             
-            # --- 3) udp.c stub: ENOPROTOOPT yerine success ---
             udp_c = k / "net/ipv4/udp.c"
             c = udp_c.read_text()
             
@@ -279,37 +276,42 @@ jobs:
                 if "case UDP_SEGMENT:" in body:
                     print(f"[=] {fn}: UDP_SEGMENT already present")
                     return src
+                
+                # Derleyici uapi udp.h'ı görmezden gelirse diye makroyu doğrudan udp.c'ye de gömüyoruz
                 if set_not_get:
-                    block = """
-            \tcase UDP_SEGMENT:
-            \t\tif (val < 0 || val > 0xFFFF)
-            \t\t\treturn -EINVAL;
-            \t\tbreak;
-            \tcase UDP_GRO:
-            \t\tbreak;
-            """
-                else:
-                    block = """
-            \tcase UDP_SEGMENT:
-            \t\tval = 0;
-            \t\tbreak;
-            \tcase UDP_GRO:
-            \t\tval = 0;
-            \t\tbreak;
-            """
-                body2, n = re.subn(
-                    r"(\n\tdefault:\n\t\terr = -ENOPROTOOPT;)",
-                    block + r"\1",
-                    body,
-                    count=1,
-                )
-                if n != 1:
-                    body2, n = re.subn(
-                        r"(\n\tdefault:\n\t\treturn -ENOPROTOOPT;)",
-                        block + r"\1",
-                        body,
-                        count=1,
+                    block = (
+                        "\n#ifndef UDP_SEGMENT\n"
+                        "#define UDP_SEGMENT\t103\n"
+                        "#endif\n"
+                        "#ifndef UDP_GRO\n"
+                        "#define UDP_GRO\t\t104\n"
+                        "#endif\n"
+                        "\tcase UDP_SEGMENT:\n"
+                        "\t\tif (val < 0 || val > 0xFFFF)\n"
+                        "\t\t\treturn -EINVAL;\n"
+                        "\t\tbreak;\n"
+                        "\tcase UDP_GRO:\n"
+                        "\t\tbreak;"
                     )
+                else:
+                    block = (
+                        "\n#ifndef UDP_SEGMENT\n"
+                        "#define UDP_SEGMENT\t103\n"
+                        "#endif\n"
+                        "#ifndef UDP_GRO\n"
+                        "#define UDP_GRO\t\t104\n"
+                        "#endif\n"
+                        "\tcase UDP_SEGMENT:\n"
+                        "\t\tval = 0;\n"
+                        "\t\tbreak;\n"
+                        "\tcase UDP_GRO:\n"
+                        "\t\tval = 0;\n"
+                        "\t\tbreak;"
+                    )
+                    
+                body2, n = re.subn(r"(\n\tdefault:\n\t\terr = -ENOPROTOOPT;)", block + r"\1", body, count=1)
+                if n != 1:
+                    body2, n = re.subn(r"(\n\tdefault:\n\t\treturn -ENOPROTOOPT;)", block + r"\1", body, count=1)
                 if n != 1:
                     print(f"[!] {fn}: default ENOPROTOOPT not found, skip")
                     return src
@@ -320,48 +322,44 @@ jobs:
             c = inject_cases(c, "udp_lib_getsockopt", False)
             udp_c.write_text(c)
             
-            # --- 4) setsockopt hook insert kaçtıysa net/socket.c'ye bas ---
             sock_c = k / "net/socket.c"
             s = sock_c.read_text()
             if "vpnhide_setsockopt_sock" in s:
                 print("[=] net/socket.c already has vpnhide_setsockopt_sock")
             else:
                 needle = "\tif (sock != NULL) {"
-                m = re.search(
-                    r"SYSCALL_DEFINE5\(\s*(?:SYSC_)?setsockopt\b.*?\)\s*\{",
-                    s,
-                    re.S,
-                )
+                m = re.search(r"SYSCALL_DEFINE5\(\s*(?:SYSC_)?setsockopt\b.*?\)\s*\{", s, re.S)
                 if not m:
                     m = re.search(r"\nSYSCALL_DEFINE5\(setsockopt,", s)
                 if not m:
                     sys.exit("setsockopt syscall not found in net/socket.c")
+                    
                 fn_start = m.start()
                 window = s[fn_start:fn_start+2500]
-                insert = """
-            #ifdef CONFIG_VPNHIDE
-            \t\t{
-            \t\t\tint _vret = vpnhide_setsockopt_sock(sock, level, optname, optval, optlen);
-            \t\t\tif (_vret) {
-            \t\t\t\terr = (_vret > 0) ? 0 : _vret;
-            \t\t\t\tgoto out_put;
-            \t\t\t}
-            \t\t}
-            #endif
-            """
+                insert_code = (
+                    "\n#ifdef CONFIG_VPNHIDE\n"
+                    "\t\t{\n"
+                    "\t\t\tint _vret = vpnhide_setsockopt_sock(sock, level, optname, optval, optlen);\n"
+                    "\t\t\tif (_vret) {\n"
+                    "\t\t\t\terr = (_vret > 0) ? 0 : _vret;\n"
+                    "\t\t\t\tgoto out_put;\n"
+                    "\t\t\t}\n"
+                    "\t\t}\n"
+                    "#endif\n"
+                )
+                
                 if needle in window:
-                    window2 = window.replace(needle, needle + insert, 1)
+                    window2 = window.replace(needle, needle + insert_code, 1)
                 elif "if (!sock)" in window or "if (sock ==" in window:
                     window2, n = re.subn(
                         r"(if\s*\(\s*!sock[^\)]*\)\s*\{?\s*return\s+-EBADF;\s*\}?)",
-                        r"\1" + insert,
-                        window,
-                        count=1,
+                        r"\1" + insert_code, window, count=1
                     )
                     if n != 1:
                         sys.exit("could not find sock lookup in setsockopt")
                 else:
                     sys.exit("could not find insert point in setsockopt")
+                    
                 sock_c.write_text(s[:fn_start] + window2 + s[fn_start+2500:])
                 print("[+] net/socket.c: injected vpnhide_setsockopt_sock")
             
