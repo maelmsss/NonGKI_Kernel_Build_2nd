@@ -266,6 +266,16 @@ jobs:
             udp_c = k / "net/ipv4/udp.c"
             c = udp_c.read_text()
             
+            if "UDP_SEGMENT 103" not in c:
+                c = (
+                    "#ifndef UDP_SEGMENT\n"
+                    "#define UDP_SEGMENT\t103\n"
+                    "#endif\n"
+                    "#ifndef UDP_GRO\n"
+                    "#define UDP_GRO\t\t104\n"
+                    "#endif\n\n"
+                ) + c
+            
             def inject_cases(src, fn, set_not_get):
                 m = re.search(rf"\n[^\n]*\b{fn}\s*\(", src)
                 if not m:
@@ -277,16 +287,9 @@ jobs:
                     print(f"[=] {fn}: UDP_SEGMENT already present")
                     return src
                 
-                # Derleyici uapi udp.h'ı görmezden gelirse diye makroyu doğrudan udp.c'ye de gömüyoruz
                 if set_not_get:
                     block = (
-                        "\n#ifndef UDP_SEGMENT\n"
-                        "#define UDP_SEGMENT\t103\n"
-                        "#endif\n"
-                        "#ifndef UDP_GRO\n"
-                        "#define UDP_GRO\t\t104\n"
-                        "#endif\n"
-                        "\tcase UDP_SEGMENT:\n"
+                        "\n\tcase UDP_SEGMENT:\n"
                         "\t\tif (val < 0 || val > 0xFFFF)\n"
                         "\t\t\treturn -EINVAL;\n"
                         "\t\tbreak;\n"
@@ -295,13 +298,7 @@ jobs:
                     )
                 else:
                     block = (
-                        "\n#ifndef UDP_SEGMENT\n"
-                        "#define UDP_SEGMENT\t103\n"
-                        "#endif\n"
-                        "#ifndef UDP_GRO\n"
-                        "#define UDP_GRO\t\t104\n"
-                        "#endif\n"
-                        "\tcase UDP_SEGMENT:\n"
+                        "\n\tcase UDP_SEGMENT:\n"
                         "\t\tval = 0;\n"
                         "\t\tbreak;\n"
                         "\tcase UDP_GRO:\n"
@@ -391,9 +388,7 @@ jobs:
                     p = Path(path)
                     if not p.exists(): continue
                     t = p.read_text()
-                    # Yorum bloklarını geçici olarak maskele (süslü parantez sayımını bozmaması için)
                     t_mask = re.sub(r'/\*.*?\*/|//[^\n]*', lambda m: ' ' * len(m.group(0)), t, flags=re.S)
-                    
                     m = re.search(r"\bstruct\s+" + struct_name + r"\s*\{", t_mask)
                     if m:
                         if field_code.strip() in t:
@@ -407,8 +402,7 @@ jobs:
                             idx += 1
                         if braces != 0:
                             sys.exit(f"patch failed: {path} (brace mismatch in {struct_name})")
-                            
-                        idx -= 1  # Kapatan süslü parantezin tam üstüne yaz
+                        idx -= 1
                         t2 = t[:idx] + field_code + "\n" + t[idx:]
                         p.write_text(t2)
                         print(f"[+] {path}: {struct_name} modified")
@@ -416,16 +410,17 @@ jobs:
                 sys.exit(f"patch failed: struct {struct_name} not found in {candidate_files}")
             
             skbuff = must("include/linux/skbuff.h").read_text()
-            
             if "SKB_GSO_UDP_L4" in skbuff and "gso_size" in must("net/ipv4/udp.c").read_text():
                 print("[=] UDP GSO TX already present, skip")
                 sys.exit(0)
             
+            # 64-Bit Feature limitine takilmamak icin Android'de hic kullanilmayan
+            # FCoE (Fibre Channel over Ethernet) ozelliginin bitini maskeliyoruz.
             if "SKB_GSO_UDP_L4" not in skbuff:
                 sub_once(
                     "include/linux/skbuff.h",
                     r"(SKB_GSO_ESP\s*=\s*1\s*<<\s*\d+,)",
-                    r"\1\n\tSKB_GSO_UDP_L4 = 1 << 17,",
+                    r"\1\n\tSKB_GSO_UDP_L4 = SKB_GSO_FCOE,",
                     label="SKB_GSO_UDP_L4",
                 )
             
@@ -434,7 +429,7 @@ jobs:
                 sub_once(
                     "include/linux/netdev_features.h",
                     r"(#define NETIF_F_GSO_ESP\s+.*\n)",
-                    r"\1#define NETIF_F_GSO_UDP_L4\t__NETIF_F(GSO_UDP_L4)\n",
+                    r"\1#define NETIF_F_GSO_UDP_L4\tNETIF_F_FSO\n",
                     label="NETIF_F_GSO_UDP_L4 define",
                 )
                 t = Path("include/linux/netdev_features.h").read_text()
@@ -446,16 +441,6 @@ jobs:
                         label="GSO_SOFTWARE includes UDP_L4",
                     )
             
-            t = Path("include/linux/netdev_features.h").read_text()
-            if "GSO_UDP_L4," not in t and "NETIF_F_GSO_UDP_L4" in t:
-                sub_once(
-                    "include/linux/netdev_features.h",
-                    r"(NETIF_F_GSO_ESP_BIT,|GSO_ESP,)",
-                    r"\1\n\tNETIF_F_GSO_UDP_L4_BIT,",
-                    label="GSO_UDP_L4 bit enum",
-                )
-            
-            # Hedef dosyayı bulamazsa alternatifleri dener ve parantez sayar
             append_to_struct_safe("udp_sock", "\t__u16 gso_size;", ["include/linux/udp.h", "include/net/udp.h"])
             append_to_struct_safe("inet_cork", "\t__u16 gso_size;", ["include/net/inet_sock.h"])
             
