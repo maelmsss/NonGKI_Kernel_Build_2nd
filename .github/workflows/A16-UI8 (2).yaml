@@ -200,482 +200,447 @@ jobs:
       - name: 🔗 Patch for no-kprobe
         uses: ./.github/workflows/patch-no-kprobe
 
-      - name: 🕵️ Integrate VPNHide Next (Legacy Android 4.14) & UDP GSO TX
-        shell: bash
-        env:
-          PATCH_SCRIPT_1: |
-            import re, sys
-            from pathlib import Path
-
-            k = Path(".")
-
-            def fn_span(src, sig):
-                m = re.search(sig, src)
-                if not m:
-                    return None
-                i = src.find("{", m.start())
-                if i < 0:
-                    return None
-                d = 0
-                for j in range(i, len(src)):
-                    if src[j] == "{":
-                        d += 1
-                    elif src[j] == "}":
-                        d -= 1
-                        if d == 0:
-                            return m.start(), j + 1
-                return None
-
-            # --- 1) hook_socket.c: 4.18 guard + MSS'i asla tünel boyutunda bırakma ---
-            hook = k / "security/vpnhide/hook_socket.c"
-            if not hook.exists():
-                sys.exit("missing security/vpnhide/hook_socket.c — apply.sh failed")
-            t = hook.read_text()
-            if "level == SOL_UDP" in t and "KERNEL_VERSION(4, 18, 0)" in t:
-                repl1 = (
-                    "#ifndef SOL_UDP\n"
-                    "#define SOL_UDP 17\n"
-                    "#endif\n"
-                    "#ifndef UDP_SEGMENT\n"
-                    "#define UDP_SEGMENT 103\n"
-                    "#endif\n"
-                    "\telse if (level == SOL_UDP) {\n"
-                    "\t\tif (optname == UDP_SEGMENT) {\n"
-                    "\t\t\tif (sk->sk_protocol != IPPROTO_UDP ||\n"
-                    "\t\t\t    sk->sk_type != SOCK_DGRAM ||\n"
-                    "\t\t\t    optlen != sizeof(int))\n"
-                    "\t\t\t\treturn 0;\n"
-                    "\t\t\tsk->sk_mark |= VH_SK_PROBE_MARK;\n"
-                    "\t\t\trecord_kmod_intercept(uid, HOOK_SETSOCKOPT);\n"
-                    "\t\t\treturn 1;\n"
-                    "\t\t}\n"
-                    "\t}"
-                )
-                t2, n = re.subn(
-                    r"#if LINUX_VERSION_CODE >= KERNEL_VERSION\(4,\s*18,\s*0\)\s*"
-                    r"else if \(level == SOL_UDP\) \{.*?\n#endif",
-                    repl1, t, count=1, flags=re.S
-                )
-                if n != 1:
-                    sys.exit("UDP_SEGMENT #if block not matched in hook_socket.c")
-                t = t2
-                print("[+] hook_socket.c: UDP_SEGMENT spoof enabled for 4.14")
-            else:
-                print("[=] hook_socket.c already without 4.18 UDP_SEGMENT guard")
-
-            # sip.ipv4_mtu tun/wg (1280) olsa bile probe 1460/1440 görsün
-            n_int = t.count("int mss = mtu > header_len ? mtu - header_len : 1460;")
-            n_u32 = t.count("u32 mss = mtu > header_len ? mtu - header_len : 1460;")
-            t = t.replace(
-                "int mss = mtu > header_len ? mtu - header_len : 1460;",
-                "int mss = (sk->sk_family == AF_INET6) ? 1440 : 1460;",
-            )
-            t = t.replace(
-                "u32 mss = mtu > header_len ? mtu - header_len : 1460;",
-                "u32 mss = (sk->sk_family == AF_INET6) ? 1440 : 1460;",
-            )
-            print(f"[+] hook_socket.c: hardcoded MSS (int={n_int} u32={n_u32})")
-            t2, n = re.subn(
-                r"(int mtu = sip\.ipv[46]_mtu \? sip\.ipv[46]_mtu : 1500;)",
-                r"\1\n\t\t\tif (mtu < 1500)\n\t\t\t\tmtu = 1500;",
-                t,
-            )
-            if n:
-                t = t2
-                print(f"[+] hook_socket.c: floored {n} IP_MTU value(s)")
-            hook.write_text(t)
-
-            # --- 2) udp.c stub ---
-            udp_c = k / "net/ipv4/udp.c"
-            c = udp_c.read_text()
-
-            def inject_cases(src, fn, set_not_get):
-                m = re.search(rf"\b{fn}\s*\(", src)
-                if not m:
-                    print(f"[!] {fn} not found")
-                    return src
-                start = m.start()
-                body = src[start:start+9000]
-                if "case UDP_SEGMENT:" in body:
-                    print(f"[=] {fn}: UDP_SEGMENT already present")
-                    return src
-                if set_not_get:
-                    block = (
-                        "\n#ifndef UDP_SEGMENT\n"
-                        "#define UDP_SEGMENT 103\n"
-                        "#endif\n"
-                        "#ifndef UDP_GRO\n"
-                        "#define UDP_GRO 104\n"
-                        "#endif\n"
-                        "\tcase UDP_SEGMENT:\n"
-                        "\t\tif (val < 0 || val > 0xFFFF)\n"
-                        "\t\t\treturn -EINVAL;\n"
-                        "\t\tbreak;\n"
-                        "\tcase UDP_GRO:\n"
-                        "\t\tbreak;"
-                    )
-                else:
-                    block = (
-                        "\n#ifndef UDP_SEGMENT\n"
-                        "#define UDP_SEGMENT 103\n"
-                        "#endif\n"
-                        "#ifndef UDP_GRO\n"
-                        "#define UDP_GRO 104\n"
-                        "#endif\n"
-                        "\tcase UDP_SEGMENT:\n"
-                        "\t\tval = 0;\n"
-                        "\t\tbreak;\n"
-                        "\tcase UDP_GRO:\n"
-                        "\t\tval = 0;\n"
-                        "\t\tbreak;"
-                    )
-                body2, n = re.subn(r"(\n\tdefault:\n\t\terr = -ENOPROTOOPT;)", block + r"\1", body, count=1)
-                if n != 1:
-                    body2, n = re.subn(r"(\n\tdefault:\n\t\treturn -ENOPROTOOPT;)", block + r"\1", body, count=1)
-                if n != 1:
-                    print(f"[!] {fn}: default ENOPROTOOPT not found, skip")
-                    return src
-                print(f"[+] {fn}: stubbed UDP_SEGMENT")
-                return src[:start] + body2 + src[start+9000:]
-
-            c = inject_cases(c, "udp_lib_setsockopt", True)
-            c = inject_cases(c, "udp_lib_getsockopt", False)
-            udp_c.write_text(c)
-
-            # --- 3) __sys_setsockopt PRE + __sys_getsockopt POST ---
-            # Bu ağaçta SYSCALL_DEFINE5 sadece wrapper: return __sys_getsockopt(...)
-            sock_c = k / "net/socket.c"
-            s = sock_c.read_text()
-
-            span = fn_span(s, r"static int __sys_setsockopt\s*\(")
-            if not span:
-                span = fn_span(s, r"SYSCALL_DEFINE5\(\s*(?:SYSC_)?setsockopt\b")
-            if not span:
-                sys.exit("setsockopt implementation not found")
-            a, b = span
-            body = s[a:b]
-            if "vpnhide_setsockopt_sock" in body:
-                print("[=] __sys_setsockopt already has vpnhide_setsockopt_sock")
-            else:
-                insert = (
-                    "\n#ifdef CONFIG_VPNHIDE\n"
-                    "\t\t{\n"
-                    "\t\t\tint _vret = vpnhide_setsockopt_sock(sock, level, optname, optval, optlen);\n"
-                    "\t\t\tif (_vret) {\n"
-                    "\t\t\t\terr = (_vret > 0) ? 0 : _vret;\n"
-                    "\t\t\t\tgoto out_put;\n"
-                    "\t\t\t}\n"
-                    "\t\t}\n"
-                    "#endif\n"
-                )
-                if "\tif (sock != NULL) {" in body:
-                    body2 = body.replace("\tif (sock != NULL) {", "\tif (sock != NULL) {" + insert, 1)
-                    s = s[:a] + body2 + s[b:]
-                    print("[+] __sys_setsockopt: injected vpnhide_setsockopt_sock")
-                else:
-                    sys.exit("could not find sock lookup in setsockopt")
-
-            span = fn_span(s, r"static int __sys_getsockopt\s*\(")
-            if not span:
-                span = fn_span(s, r"SYSCALL_DEFINE5\(\s*(?:SYSC_)?getsockopt\b")
-            if not span:
-                sys.exit("getsockopt implementation not found")
-            a, b = span
-            body = s[a:b]
-            if "vpnhide_getsockopt(" in body:
-                print("[=] __sys_getsockopt already has vpnhide_getsockopt")
-            else:
-                insert = (
-                    "\n#ifdef CONFIG_VPNHIDE\n"
-                    "\t\tif (!err)\n"
-                    "\t\t\tvpnhide_getsockopt(sock, level, optname, optval, optlen, &err);\n"
-                    "#endif\n"
-                )
-                body2, n = re.subn(r"(\n\tout_put:)", insert + r"\1", body, count=1)
-                if n != 1:
-                    sys.exit("could not find out_put in __sys_getsockopt")
-                s = s[:a] + body2 + s[b:]
-                print("[+] __sys_getsockopt: injected vpnhide_getsockopt POST (after BPF)")
-            sock_c.write_text(s)
-
-            # --- 4) tcp.c — SADECE do_tcp_getsockopt (setsockopt case'ine DOKUNMA) ---
-            tcp_c_path = k / "net/ipv4/tcp.c"
-            tcpc = tcp_c_path.read_text()
-
-            span = fn_span(tcpc, r"(?:static\s+)?int\s+do_tcp_getsockopt\s*\(")
-            if not span:
-                sys.exit("do_tcp_getsockopt not found")
-            a, b = span
-            body = tcpc[a:b]
-
-            if "VPNHide TCP_MAXSEG spoof" in body:
-                print("[=] do_tcp_getsockopt: TCP_MAXSEG spoof already present")
-                body2, n = body, 1
-            else:
-                # Unique: val = tp->mss_cache sadece GET tarafında var
-                body2, n = re.subn(
-                    r"(case\s+TCP_MAXSEG\s*:\s*val\s*=\s*tp->mss_cache;.*?mss_clamp;\s*)(break\s*;)",
-                    r"\1\n\t\t/* VPNHide TCP_MAXSEG spoof */\n"
-                    r"\t\tif (val < 1400)\n"
-                    r"\t\t\tval = 1460;\n"
-                    r"\t\t\2",
-                    body, count=1, flags=re.S,
-                )
-                if n != 1:
-                    print("[!] TCP_MAXSEG get-case not matched, dump:")
-                    print(body[:1800])
-                    sys.exit("do_tcp_getsockopt TCP_MAXSEG patch failed")
-                print("[+] do_tcp_getsockopt: TCP_MAXSEG spoof (mss_cache path, NOT setsockopt)")
-
-            if "VPNHide TCP_INFO spoof" in body2:
-                print("[=] do_tcp_getsockopt: TCP_INFO spoof already present")
-            else:
-                body3, n = re.subn(
-                    r"(tcp_get_info\s*\(\s*sk\s*,\s*&info\s*\)\s*;)",
-                    r"\1\n"
-                    r"\t\t/* VPNHide TCP_INFO spoof */\n"
-                    r"\t\tif (info.tcpi_snd_mss < 1400)\n"
-                    r"\t\t\tinfo.tcpi_snd_mss = 1460;\n"
-                    r"\t\tif (info.tcpi_rcv_mss < 1400)\n"
-                    r"\t\t\tinfo.tcpi_rcv_mss = 1460;\n"
-                    r"\t\tif (info.tcpi_advmss < 1400)\n"
-                    r"\t\t\tinfo.tcpi_advmss = 1460;\n"
-                    r"\t\tif (info.tcpi_pmtu && info.tcpi_pmtu < 1500)\n"
-                    r"\t\t\tinfo.tcpi_pmtu = 1500;",
-                    body2, count=1,
-                )
-                if n != 1:
-                    print("[!] tcp_get_info() call not found in do_tcp_getsockopt")
-                    sys.exit("TCP_INFO patch failed")
-                body2 = body3
-                print("[+] do_tcp_getsockopt: TCP_INFO spoof after tcp_get_info()")
-
-            tcpc = tcpc[:a] + body2 + tcpc[b:]
-            tcp_c_path.write_text(tcpc)
-
-            # doğrulama: spoof GET'te mi, SET'te mi?
-            span_set = fn_span(tcpc, r"(?:static\s+)?int\s+do_tcp_setsockopt\s*\(")
-            span_get = fn_span(tcpc, r"(?:static\s+)?int\s+do_tcp_getsockopt\s*\(")
-            print("[*] spoof in SETSOCKOPT (should be False):",
-                  span_set is not None and "VPNHide TCP_MAXSEG spoof" in tcpc[span_set[0]:span_set[1]])
-            print("[*] spoof in GETSOCKOPT (must be True):",
-                  span_get is not None and "VPNHide TCP_MAXSEG spoof" in tcpc[span_get[0]:span_get[1]])
-            print("[*] TCP_INFO spoof:", "VPNHide TCP_INFO spoof" in tcpc)
-            print("[*] vpnhide_getsockopt in socket.c:", "vpnhide_getsockopt(" in sock_c.read_text())
-            print("[+] VPNHide Fingerprint fixes done")
-          PATCH_SCRIPT_2: |
-            import re, sys
-            from pathlib import Path
-
-            k = Path(".")
-
-            def must(p):
-                p = Path(p)
-                if not p.exists():
-                    sys.exit(f"missing {p}")
-                return p
-
-            def sub_once(path, pat, repl, flags=0, label=""):
-                p = must(path)
-                t = p.read_text()
-                t2, n = re.subn(pat, repl, t, count=1, flags=flags)
-                if n != 1:
-                    sys.exit(f"patch failed: {path} ({label or pat[:60]!r})")
-                p.write_text(t2)
-                print(f"[+] {path}: {label}")
-
-            def append_to_struct_safe(struct_name, field_code, candidate_files):
-                for path in candidate_files:
-                    p = Path(path)
-                    if not p.exists(): continue
-                    t = p.read_text()
-                    t_mask = re.sub(r'/\*.*?\*/|//[^\n]*', lambda m: ' ' * len(m.group(0)), t, flags=re.S)
-                    m = re.search(r"\bstruct\s+" + struct_name + r"\s*\{", t_mask)
-                    if m:
-                        if field_code.strip() in t:
-                            print(f"[=] {path}: {struct_name} already patched")
-                            return
-                        braces = 1
-                        idx = m.end()
-                        while idx < len(t_mask) and braces > 0:
-                            if t_mask[idx] == '{': braces += 1
-                            elif t_mask[idx] == '}': braces -= 1
-                            idx += 1
-                        if braces != 0:
-                            sys.exit(f"patch failed: {path} (brace mismatch in {struct_name})")
-                        idx -= 1
-                        t2 = t[:idx] + field_code + "\n" + t[idx:]
-                        p.write_text(t2)
-                        print(f"[+] {path}: {struct_name} modified")
-                        return
-                sys.exit(f"patch failed: struct {struct_name} not found in {candidate_files}")
-
-            skbuff = must("include/linux/skbuff.h").read_text()
-            if "SKB_GSO_UDP_L4" in skbuff and "gso_size" in must("net/ipv4/udp.c").read_text():
-                print("[=] UDP GSO TX already present, skip")
-                sys.exit(0)
-
-            # gso_type maskesi 4.14 kernelde sadece 16-bittir.
-            # IPXIP4 alias'ı kullanılıyor (1 << 9).
-            if "SKB_GSO_UDP_L4" not in skbuff:
-                sub_once(
-                    "include/linux/skbuff.h",
-                    r"(SKB_GSO_ESP\s*=\s*1\s*<<\s*\d+,)",
-                    r"\1\n\tSKB_GSO_UDP_L4 = 1 << 9,",
-                    label="SKB_GSO_UDP_L4 alias"
-                )
-
-            nf = must("include/linux/netdev_features.h").read_text()
-            if "NETIF_F_GSO_UDP_L4" not in nf:
-                sub_once(
-                    "include/linux/netdev_features.h",
-                    r"(#define NETIF_F_GSO_ESP\s+.*\n)",
-                    r"\1#define NETIF_F_GSO_UDP_L4\t0\n",
-                    label="NETIF_F_GSO_UDP_L4 define"
-                )
-
-            append_to_struct_safe("udp_sock", "\t__u16 gso_size;", ["include/linux/udp.h", "include/net/udp.h"])
-            append_to_struct_safe("inet_cork", "\t__u16 gso_size;", ["include/net/inet_sock.h"])
-
-            udp = must("net/ipv4/udp.c").read_text()
-            if "up->gso_size" not in udp:
-                if "case UDP_SEGMENT:" in udp:
-                    sub_once(
-                        "net/ipv4/udp.c",
-                        r"case UDP_SEGMENT:\s*if \(val < 0 \|\| val > 0xFFFF\)\s*return -EINVAL;\s*break;",
-                        (
-                            "case UDP_SEGMENT:\n"
-                            "\t\tif (val < 0 || val > 0xFFFF)\n"
-                            "\t\t\treturn -EINVAL;\n"
-                            "\t\tup->gso_size = val;\n"
-                            "\t\tbreak;"
-                        ),
-                        label="UDP_SEGMENT stores gso_size",
-                    )
-                if (
-                    "case UDP_SEGMENT:" in Path("net/ipv4/udp.c").read_text() and 
-                    "val = up->gso_size" not in Path("net/ipv4/udp.c").read_text()
-                ):
-                    sub_once(
-                        "net/ipv4/udp.c",
-                        r"(case UDP_SEGMENT:\s*val = 0;\s*break;)",
-                        "case UDP_SEGMENT:\n\t\tval = up->gso_size;\n\t\tbreak;",
-                        label="getsockopt gso_size",
-                    )
-
-                send_repl = (
-                    r"\1"
-                    "\tif (udp_sk(sk)->gso_size) {\n"
-                    "\t\tunsigned int mss = udp_sk(sk)->gso_size;\n"
-                    "\t\tunsigned int hlen = skb_network_header_len(skb) + sizeof(*uh);\n"
-                    "\t\tif (hlen + mss > 0xFFFF)\n"
-                    "\t\t\treturn -EINVAL;\n"
-                    "\t\tif (skb->len > mss * 64)\n"
-                    "\t\t\treturn -EINVAL;\n"
-                    "\t\tif (skb->ip_summed != CHECKSUM_PARTIAL || is_udplite)\n"
-                    "\t\t\treturn -EIO;\n"
-                    "\t\tskb_shinfo(skb)->gso_size = mss;\n"
-                    "\t\tskb_shinfo(skb)->gso_type = SKB_GSO_UDP_L4;\n"
-                    "\t\tskb_shinfo(skb)->gso_segs = DIV_ROUND_UP(skb->len - hlen, mss);\n"
-                    "\t}\n\n"
-                    "send:"
-                )
-
-                sub_once(
-                    "net/ipv4/udp.c",
-                    r"(static int udp_send_skb\([\s\S]*?uh->check = CSUM_MANGLED_0;\s*)send:",
-                    send_repl,
-                    label="udp_send_skb GSO",
-                )
-
-            off = must("net/ipv4/udp_offload.c").read_text()
-            if "__udp_gso_segment" not in off:
-                helper = (
-                    "\n"
-                    "struct sk_buff *__udp_gso_segment(struct sk_buff *gso_skb,\n"
-                    "\t\t\t\t  netdev_features_t features)\n"
-                    "{\n"
-                    "\tstruct sk_buff *segs, *seg;\n"
-                    "\tstruct udphdr *uh = udp_hdr(gso_skb);\n"
-                    "\tunsigned int mss = skb_shinfo(gso_skb)->gso_size;\n\n"
-                    "\tif (gso_skb->len <= sizeof(*uh) + mss)\n"
-                    "\t\treturn ERR_PTR(-EINVAL);\n\n"
-                    "\tsegs = skb_segment(gso_skb, features);\n"
-                    "\tif (IS_ERR_OR_NULL(segs))\n"
-                    "\t\treturn segs;\n\n"
-                    "\tfor (seg = segs; seg; seg = seg->next) {\n"
-                    "\t\tuh = udp_hdr(seg);\n"
-                    "\t\tuh->len = htons(seg->len - skb_transport_offset(seg));\n"
-                    "\t\tif (seg->ip_summed == CHECKSUM_PARTIAL) {\n"
-                    "\t\t\tuh->check = 0;\n"
-                    "\t\t\tseg->csum_start = skb_transport_header(seg) - seg->head;\n"
-                    "\t\t\tseg->csum_offset = offsetof(struct udphdr, check);\n"
-                    "\t\t}\n"
-                    "\t}\n"
-                    "\treturn segs;\n"
-                    "}\n\n"
-                    r"\1"
-                )
-
-                sub_once(
-                    "net/ipv4/udp_offload.c",
-                    r"(static struct sk_buff \*udp4_ufo_fragment\()",
-                    helper,
-                    label="insert __udp_gso_segment",
-                )
-
-                off2 = Path("net/ipv4/udp_offload.c").read_text()
-                if "SKB_GSO_UDP_L4" not in off2.split("udp4_ufo_fragment")[1][:800]:
-                    sub_once(
-                        "net/ipv4/udp_offload.c",
-                        r"if \(!\(skb_shinfo\(skb\)->gso_type & SKB_GSO_UDP\)\)",
-                        "if (!(skb_shinfo(skb)->gso_type & (SKB_GSO_UDP | SKB_GSO_UDP_L4)))",
-                        label="ufo_fragment accept UDP_L4",
-                    )
-
-                    branch_repl = (
-                        r"\1"
-                        "\tif (skb_shinfo(skb)->gso_type & SKB_GSO_UDP_L4)\n"
-                        "\t\treturn __udp_gso_segment(skb, features);\n\n"
-                    )
-
-                    sub_once(
-                        "net/ipv4/udp_offload.c",
-                        r"(if \(!pskb_may_pull\(skb, sizeof\(struct udphdr\)\)\)\s*goto out;\s*)",
-                        branch_repl,
-                        label="branch to __udp_gso_segment",
-                    )
-
-            print("[+] software UDP GSO TX patched")
-
+      - name: Apply VPNHide kpatch + UDP_SEGMENT backport
         run: |
-          set -x
-          cd $GITHUB_WORKSPACE/device_kernel
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+
+          # 1) UDP_SEGMENT / UDP GSO sockopt backport (4.14)
+          python3 - <<'PY'
+          #!/usr/bin/env python3
+          """Idempotent UDP_SEGMENT (UDP GSO) backport for Linux 4.14.
           
-          echo "[+] VPNHide Next backend repo..."
-          rm -rf /tmp/vpnhide_next_backend
-          git clone --depth=1 https://github.com/soranerai/vpnhide_next_backend.git /tmp/vpnhide_next_backend
+          Mirrors upstream:
+            bec1f6f69736 udp: generate gso with UDP_SEGMENT
+            2e8de8576343 udp: add gso segment cmsg
+          plus the software checksum fallback so TUN does not return -EIO.
+          """
+          from __future__ import annotations
           
-          echo "[+] Fixing Exynos variable names in inject_legacy.py..."
-          sed -i 's/rt6i_dst/fib6_dst/g' /tmp/vpnhide_next_backend/kpatch/scripts/inject_legacy.py
-          sed -i 's/rt->dst.dev/rt->fib6_nh.nh_dev/g' /tmp/vpnhide_next_backend/kpatch/scripts/inject_legacy.py
+          import re
+          import sys
+          from pathlib import Path
           
-          echo "[+] Running apply.sh..."
-          chmod +x /tmp/vpnhide_next_backend/kpatch/scripts/apply.sh
-          /tmp/vpnhide_next_backend/kpatch/scripts/apply.sh "$GITHUB_WORKSPACE/device_kernel" upstream-4.14
+          ROOT = Path(sys.argv[1] if len(sys.argv) > 1 else ".").resolve()
           
-          echo "[+] 4.14 UDP_SEGMENT fingerprint fix..."
-          python3 -c "$PATCH_SCRIPT_1"
           
-          echo "[+] Software UDP GSO TX (4.14 backport)..."
-          python3 -c "$PATCH_SCRIPT_2"
+          def read(rel: str) -> str:
+              p = ROOT / rel
+              if not p.is_file():
+                  sys.exit(f"FAIL missing {rel}")
+              return p.read_text(encoding="utf-8", errors="surrogateescape")
           
-          echo "[+] Updating defconfig..."
-          DEFCONFIG_FILE="arch/arm64/configs/${{ env.DEFCONFIG_NAME }}"
-          sed -i '/CONFIG_VPNHIDE/d' "$DEFCONFIG_FILE"
-          echo "CONFIG_VPNHIDE=y" >> "$DEFCONFIG_FILE"
           
-          echo "[+] VPNHide Next & UDP GSO TX integrated successfully."
+          def write(rel: str, text: str) -> None:
+              (ROOT / rel).write_text(text, encoding="utf-8", errors="surrogateescape")
+          
+          
+          def sub(rel: str, pattern: str, repl: str, *, already: str, flags: int = 0) -> None:
+              text = read(rel)
+              if already in text:
+                  print(f"skip {rel}: already applied ({already[:60]})")
+                  return
+              new, n = re.subn(pattern, repl, text, count=1, flags=flags)
+              if n != 1:
+                  sys.exit(f"FAIL {rel}: expected 1 match, got {n} for {pattern[:120]!r}")
+              write(rel, new)
+              print(f"ok   {rel}")
+          
+          
+          GSO_IPV4 = r'''	if (cork->gso_size) {
+          		const int hlen = skb_network_header_len(skb) +
+          				 sizeof(struct udphdr);
+          
+          		if (hlen + min(datalen, (int)cork->gso_size) > cork->fragsize) {
+          			kfree_skb(skb);
+          			return -EMSGSIZE;
+          		}
+          		if (skb->len > cork->gso_size * UDP_MAX_SEGMENTS) {
+          			kfree_skb(skb);
+          			return -EINVAL;
+          		}
+          		if (sk->sk_no_check_tx || is_udplite || dst_xfrm(skb_dst(skb))) {
+          			kfree_skb(skb);
+          			return -EIO;
+          		}
+          		if (datalen > cork->gso_size) {
+          			skb_shinfo(skb)->gso_size = cork->gso_size;
+          			skb_shinfo(skb)->gso_type = SKB_GSO_UDP_L4;
+          			skb_shinfo(skb)->gso_segs = DIV_ROUND_UP(datalen,
+          								 cork->gso_size);
+          		}
+          		if (skb->ip_summed == CHECKSUM_PARTIAL)
+          			goto csum_partial;
+          		goto send;
+          	}
+          
+          '''
+          
+          GSO_IPV6 = r'''	if (cork->gso_size) {
+          		const int hlen = skb_network_header_len(skb) +
+          				 sizeof(struct udphdr);
+          
+          		if (hlen + min(datalen, (int)cork->gso_size) > cork->fragsize) {
+          			kfree_skb(skb);
+          			return -EMSGSIZE;
+          		}
+          		if (skb->len > cork->gso_size * UDP_MAX_SEGMENTS) {
+          			kfree_skb(skb);
+          			return -EINVAL;
+          		}
+          		if (udp_sk(sk)->no_check6_tx || is_udplite ||
+          		    dst_xfrm(skb_dst(skb))) {
+          			kfree_skb(skb);
+          			return -EIO;
+          		}
+          		if (datalen > cork->gso_size) {
+          			skb_shinfo(skb)->gso_size = cork->gso_size;
+          			skb_shinfo(skb)->gso_type = SKB_GSO_UDP_L4;
+          			skb_shinfo(skb)->gso_segs = DIV_ROUND_UP(datalen,
+          								 cork->gso_size);
+          		}
+          		if (skb->ip_summed == CHECKSUM_PARTIAL)
+          			goto csum_partial;
+          		goto send;
+          	}
+          
+          '''
+          
+          CMSG = r'''static int __udp_cmsg_send(struct cmsghdr *cmsg, u16 *gso_size)
+          {
+          	switch (cmsg->cmsg_type) {
+          	case UDP_SEGMENT:
+          		if (cmsg->cmsg_len != CMSG_LEN(sizeof(__u16)))
+          			return -EINVAL;
+          		*gso_size = *(__u16 *)CMSG_DATA(cmsg);
+          		return 0;
+          	default:
+          		return -EINVAL;
+          	}
+          }
+          
+          int udp_cmsg_send(struct sock *sk, struct msghdr *msg, u16 *gso_size)
+          {
+          	struct cmsghdr *cmsg;
+          	bool need_ip = false;
+          	int err;
+          
+          	for_each_cmsghdr(cmsg, msg) {
+          		if (!CMSG_OK(msg, cmsg))
+          			return -EINVAL;
+          
+          		if (cmsg->cmsg_level != SOL_UDP) {
+          			need_ip = true;
+          			continue;
+          		}
+          
+          		err = __udp_cmsg_send(cmsg, gso_size);
+          		if (err)
+          			return err;
+          	}
+          
+          	return need_ip;
+          }
+          EXPORT_SYMBOL_GPL(udp_cmsg_send);
+          
+          '''
+          
+          
+          def main() -> None:
+              sub(
+                  "include/uapi/linux/udp.h",
+                  r"(#define UDP_NO_CHECK6_RX\s+102[^\n]*\n)",
+                  r"\1#define UDP_SEGMENT	103	/* Set GSO segmentation size */\n",
+                  already="#define UDP_SEGMENT",
+              )
+              sub(
+                  "include/linux/udp.h",
+                  r"(__u16\s+len;\s*/\*[^\n]*pending frames[^\n]*\*/\n)",
+                  r"\1	__u16		 gso_size;	/* UDP GSO segment size (UDP_SEGMENT) */\n",
+                  already="gso_size;",
+              )
+              sub(
+                  "include/net/inet_sock.h",
+                  r"(char\s+priority;\n)(\};\n\nstruct inet_cork_full)",
+                  r"\1	__u16			gso_size;\n\2",
+                  already="gso_size;",
+              )
+              sub(
+                  "include/net/ip.h",
+                  r"(char\s+priority;\n)(\};\n\n#define IPCB\(skb\))",
+                  r"\1	__u16			gso_size;\n\2",
+                  already="gso_size;",
+              )
+              sub(
+                  "include/net/ipv6.h",
+                  r"(__s8\s+dontfrag;\n)(\tstruct ipv6_txoptions \*opt;)",
+                  r"\1	__u16 gso_size;\n\2",
+                  already="gso_size;",
+              )
+              sub(
+                  "include/net/udp.h",
+                  r"(unsigned int mss, __sum16 check\);\n)",
+                  r"\1\n#define UDP_MAX_SEGMENTS	(1 << 6U)\n"
+                  r"int udp_cmsg_send(struct sock *sk, struct msghdr *msg, u16 *gso_size);\n",
+                  already="udp_cmsg_send(",
+              )
+              sub(
+                  "include/linux/netdev_features.h",
+                  r"(NETIF_F_GSO_UDP_BIT,\s*/\* \.\.\. UFO, deprecated except tuntap \*/\n)"
+                  r"(\s*/\*\*/NETIF_F_GSO_LAST =\s*/\* last bit, see GSO_MASK \*/\n)"
+                  r"(\s*NETIF_F_GSO_UDP_BIT,)",
+                  r"\1	NETIF_F_GSO_UDP_L4_BIT,		/* ... UDP payload GSO (not UFO) */\n"
+                  r"\2		NETIF_F_GSO_UDP_L4_BIT,",
+                  already="NETIF_F_GSO_UDP_L4_BIT",
+              )
+              sub(
+                  "include/linux/netdev_features.h",
+                  r"(#define NETIF_F_GSO_UDP\s+__NETIF_F\(GSO_UDP\)\n)",
+                  r"\1#define NETIF_F_GSO_UDP_L4	__NETIF_F(GSO_UDP_L4)\n",
+                  already="#define NETIF_F_GSO_UDP_L4",
+              )
+              sub(
+                  "include/linux/netdev_features.h",
+                  r"(#define NETIF_F_GSO_SOFTWARE\s+\(NETIF_F_ALL_TSO \| \\\n\s+NETIF_F_GSO_SCTP\))",
+                  r"\1				 NETIF_F_GSO_SCTP | NETIF_F_GSO_UDP_L4)",
+                  already="NETIF_F_GSO_UDP_L4)",
+              )
+              sub(
+                  "include/linux/netdevice.h",
+                  r"(BUILD_BUG_ON\(SKB_GSO_UDP != \(NETIF_F_GSO_UDP >> NETIF_F_GSO_SHIFT\)\);\n)",
+                  r"\1	BUILD_BUG_ON(SKB_GSO_UDP_L4 != (NETIF_F_GSO_UDP_L4 >> NETIF_F_GSO_SHIFT));\n",
+                  already="SKB_GSO_UDP_L4 != (NETIF_F_GSO_UDP_L4",
+              )
+              sub(
+                  "net/ipv4/ip_output.c",
+                  r"(cork->tx_flags = ipc->tx_flags;\n)(\n\treturn 0;)",
+                  r"\1	cork->gso_size = ipc->gso_size;\n\2",
+                  already="cork->gso_size = ipc->gso_size",
+              )
+              sub(
+                  "net/ipv6/ip6_output.c",
+                  r"(cork->base.length = 0;\n)(\n\treturn 0;)",
+                  r"\1	cork->base.gso_size = ipc6->gso_size;\n\2",
+                  already="cork->base.gso_size = ipc6->gso_size",
+              )
+          
+              # ipv4 udp_send_skb
+              sub(
+                  "net/ipv4/udp.c",
+                  r"static int udp_send_skb\(struct sk_buff \*skb, struct flowi4 \*fl4\)\n",
+                  "static int udp_send_skb(struct sk_buff *skb, struct flowi4 *fl4,\n"
+                  "			struct inet_cork *cork)\n",
+                  already="struct inet_cork *cork)",
+              )
+              sub(
+                  "net/ipv4/udp.c",
+                  r"(int len = skb->len - offset;\n)(\t__wsum csum = 0;)",
+                  r"\1	int datalen = len - sizeof(*uh);\n\2",
+                  already="int datalen = len - sizeof(*uh);",
+              )
+              sub(
+                  "net/ipv4/udp.c",
+                  r"(uh->len = htons\(len\);\n\tuh->check = 0;\n\n)(\tif \(is_udplite\))",
+                  r"\1" + GSO_IPV4 + r"\2",
+                  already="if (cork->gso_size)",
+              )
+              sub(
+                  "net/ipv4/udp.c",
+                  r"(else if \(skb->ip_summed == CHECKSUM_PARTIAL\) \{ /\* UDP hardware csum \*/\n\n)"
+                  r"(\t\tudp4_hwcsum\(skb, fl4->saddr, fl4->daddr\);)",
+                  r"\1csum_partial:\n\n\2",
+                  already="\ncsum_partial:\n",
+              )
+              sub(
+                  "net/ipv4/udp.c",
+                  r"err = udp_send_skb\(skb, fl4\);",
+                  "err = udp_send_skb(skb, fl4, &inet->cork.base);",
+                  already="udp_send_skb(skb, fl4, &inet->cork.base)",
+              )
+              sub(
+                  "net/ipv4/udp.c",
+                  r"(EXPORT_SYMBOL\(udp_push_pending_frames\);\n\n)(int udp_sendmsg\()",
+                  r"\1" + CMSG + r"\2",
+                  already="int udp_cmsg_send(struct sock *sk, struct msghdr *msg, u16 *gso_size)",
+              )
+              sub(
+                  "net/ipv4/udp.c",
+                  r"(ipc.tos = -1;\n)",
+                  r"\1	ipc.gso_size = up->gso_size;\n",
+                  already="ipc.gso_size = up->gso_size",
+              )
+              sub(
+                  "net/ipv4/udp.c",
+                  r"err = ip_cmsg_send\(sk, msg, &ipc, sk->sk_family == AF_INET6\);\n"
+                  r"\t\tif \(unlikely\(err\)\) \{",
+                  "err = udp_cmsg_send(sk, msg, &ipc.gso_size);\n"
+                  "		if (err > 0)\n"
+                  "			err = ip_cmsg_send(sk, msg, &ipc,\n"
+                  "					   sk->sk_family == AF_INET6);\n"
+                  "		if (unlikely(err < 0)) {",
+                  already="udp_cmsg_send(sk, msg, &ipc.gso_size)",
+              )
+              sub(
+                  "net/ipv4/udp.c",
+                  r"(if \(!corkreq\) \{\n)"
+                  r"(\t\tskb = ip_make_skb\(sk, fl4, getfrag, msg, ulen,\n"
+                  r"\t\t\t\t  sizeof\(struct udphdr\), &ipc, &rt,\n"
+                  r"\t\t\t\t  msg->msg_flags\);\n"
+                  r"\t\terr = PTR_ERR\(skb\);\n"
+                  r"\t\tif \(!IS_ERR_OR_NULL\(skb\)\)\n"
+                  r"\t\t\terr = udp_send_skb\(skb, fl4\);)",
+                  r"\1		struct inet_cork cork;\n"
+                  r"\n"
+                  r"		skb = ip_make_skb(sk, fl4, getfrag, msg, ulen,\n"
+                  r"				  sizeof(struct udphdr), &ipc, &rt,\n"
+                  r"				  msg->msg_flags);\n"
+                  r"		err = PTR_ERR(skb);\n"
+                  r"		if (!IS_ERR_OR_NULL(skb)) {\n"
+                  r"			cork.gso_size = ipc.gso_size;\n"
+                  r"			cork.fragsize = ip_sk_use_pmtu(sk) ?\n"
+                  r"				dst_mtu(skb_dst(skb)) :\n"
+                  r"				skb_dst(skb)->dev->mtu;\n"
+                  r"			err = udp_send_skb(skb, fl4, &cork);\n"
+                  r"		}",
+                  already="cork.gso_size = ipc.gso_size",
+              )
+              sub(
+                  "net/ipv4/udp.c",
+                  r"(case UDP_NO_CHECK6_RX:\n\t\tup->no_check6_rx = valbool;\n\t\tbreak;\n\n)",
+                  r"\1	case UDP_SEGMENT:\n"
+                  r"		if (val < 0 || val > USHRT_MAX)\n"
+                  r"			return -EINVAL;\n"
+                  r"		up->gso_size = val;\n"
+                  r"		break;\n\n",
+                  already="up->gso_size = val",
+              )
+              sub(
+                  "net/ipv4/udp.c",
+                  r"(case UDP_NO_CHECK6_RX:\n\t\tval = up->no_check6_rx;\n\t\tbreak;\n\n)",
+                  r"\1	case UDP_SEGMENT:\n"
+                  r"		val = up->gso_size;\n"
+                  r"		break;\n\n",
+                  already="val = up->gso_size",
+              )
+          
+              # ipv6
+              sub(
+                  "net/ipv6/udp.c",
+                  r"static int udp_v6_send_skb\(struct sk_buff \*skb, struct flowi6 \*fl6\)\n",
+                  "static int udp_v6_send_skb(struct sk_buff *skb, struct flowi6 *fl6,\n"
+                  "			   struct inet_cork *cork)\n",
+                  already="struct inet_cork *cork)",
+              )
+              sub(
+                  "net/ipv6/udp.c",
+                  r"(int offset = skb_transport_offset\(skb\);\n"
+                  r"\tint len = skb->len - offset;\n)",
+                  r"\1	int datalen = len - sizeof(*uh);\n",
+                  already="int datalen = len - sizeof(*uh);",
+              )
+              sub(
+                  "net/ipv6/udp.c",
+                  r"(uh->len = htons\(len\);\n\tuh->check = 0;\n\n)(\tif \(is_udplite\)\n\t\tcsum = udplite_csum\(skb\);)",
+                  r"\1" + GSO_IPV6 + r"\2",
+                  already="if (cork->gso_size)",
+              )
+              sub(
+                  "net/ipv6/udp.c",
+                  r"(else if \(skb->ip_summed == CHECKSUM_PARTIAL\) \{ /\* UDP hardware csum \*/\n)"
+                  r"(\t\tudp6_hwcsum_outgoing\(sk, skb, &fl6->saddr, &fl6->daddr, len\);)",
+                  r"\1csum_partial:\n\2",
+                  already="\ncsum_partial:\n",
+              )
+              sub(
+                  "net/ipv6/udp.c",
+                  r"err = udp_v6_send_skb\(skb, &fl6\);",
+                  "err = udp_v6_send_skb(skb, &fl6, &inet_sk(sk)->cork.base);",
+                  already="udp_v6_send_skb(skb, &fl6, &inet_sk(sk)->cork.base)",
+              )
+              sub(
+                  "net/ipv6/udp.c",
+                  r"(ipc6.dontfrag = -1;\n)",
+                  r"\1	ipc6.gso_size = up->gso_size;\n",
+                  already="ipc6.gso_size = up->gso_size",
+              )
+              sub(
+                  "net/ipv6/udp.c",
+                  r"err = ip6_datagram_send_ctl\(sock_net\(sk\), sk, msg, &fl6, &ipc6, &sockc\);",
+                  "err = udp_cmsg_send(sk, msg, &ipc6.gso_size);\n"
+                  "		if (err > 0)\n"
+                  "			err = ip6_datagram_send_ctl(sock_net(sk), sk, msg, &fl6,\n"
+                  "						    &ipc6, &sockc);",
+                  already="udp_cmsg_send(sk, msg, &ipc6.gso_size)",
+              )
+              sub(
+                  "net/ipv6/udp.c",
+                  r"(if \(!corkreq\) \{\n\t\tstruct sk_buff \*skb;\n\n)"
+                  r"(\t\tskb = ip6_make_skb\(sk, getfrag, msg, ulen,\n"
+                  r"\t\t\t\t   sizeof\(struct udphdr\), &ipc6,\n"
+                  r"\t\t\t\t   &fl6, \(struct rt6_info \*\)dst,\n"
+                  r"\t\t\t\t   msg->msg_flags, &sockc\);\n"
+                  r"\t\terr = PTR_ERR\(skb\);\n"
+                  r"\t\tif \(!IS_ERR_OR_NULL\(skb\)\)\n"
+                  r"\t\t\terr = udp_v6_send_skb\(skb, &fl6\);)",
+                  r"\1		struct inet_cork cork;\n"
+                  r"\n"
+                  r"		skb = ip6_make_skb(sk, getfrag, msg, ulen,\n"
+                  r"				   sizeof(struct udphdr), &ipc6,\n"
+                  r"				   &fl6, (struct rt6_info *)dst,\n"
+                  r"				   msg->msg_flags, &sockc);\n"
+                  r"		err = PTR_ERR(skb);\n"
+                  r"		if (!IS_ERR_OR_NULL(skb)) {\n"
+                  r"			cork.gso_size = ipc6.gso_size;\n"
+                  r"			cork.fragsize = dst_mtu(skb_dst(skb));\n"
+                  r"			err = udp_v6_send_skb(skb, &fl6, &cork);\n"
+                  r"		}",
+                  already="cork.gso_size = ipc6.gso_size",
+              )
+          
+              sub(
+                  "net/ipv4/udp_offload.c",
+                  r"(if \(!can_checksum_protocol\(features, htons\(ETH_P_IP\)\)\)\n)"
+                  r"\t\treturn ERR_PTR\(-EIO\);",
+                  r"\1		features &= ~(NETIF_F_CSUM_MASK | NETIF_F_GSO_MASK);",
+                  already="features &= ~(NETIF_F_CSUM_MASK | NETIF_F_GSO_MASK)",
+              )
+              sub(
+                  "net/ipv6/udp_offload.c",
+                  r"(if \(!can_checksum_protocol\(features, htons\(ETH_P_IPV6\)\)\)\n)"
+                  r"\t\treturn ERR_PTR\(-EIO\);",
+                  r"\1		features &= ~(NETIF_F_CSUM_MASK | NETIF_F_GSO_MASK);",
+                  already="features &= ~(NETIF_F_CSUM_MASK | NETIF_F_GSO_MASK)",
+              )
+          
+              leftover4 = re.findall(r"udp_send_skb\([^;]*fl4\);", read("net/ipv4/udp.c"))
+              leftover4 = [x for x in leftover4 if ", &" not in x and ", cork" not in x]
+              if leftover4:
+                  sys.exit(f"FAIL leftover 2-arg udp_send_skb: {leftover4}")
+              leftover6 = re.findall(r"udp_v6_send_skb\([^;]*&fl6\);", read("net/ipv6/udp.c"))
+              leftover6 = [x for x in leftover6 if ", &" not in x.split("&fl6")[-1]]
+              leftover6 = [x for x in leftover6 if x.strip().endswith("&fl6);")]
+              if leftover6:
+                  sys.exit(f"FAIL leftover 2-arg udp_v6_send_skb: {leftover6}")
+          
+              print("UDP_SEGMENT 4.14 backport complete")
+          
+          
+          if __name__ == "__main__":
+              main()
+          PY
+
+          # 2) VPNHide Next in-tree inject (upstream-4.14 profile)
+          git clone --depth 1 https://github.com/soranerai/vpnhide_next_backend.git /tmp/vpnhide_next_backend
+          sed -i 's/#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 18, 0)/#if defined(UDP_SEGMENT)/' \
+            /tmp/vpnhide_next_backend/kpatch/security/vpnhide/hook_socket.c
+          bash /tmp/vpnhide_next_backend/kpatch/scripts/apply.sh "$GITHUB_WORKSPACE" upstream-4.14
+          grep -q '^CONFIG_VPNHIDE=y' arch/arm64/configs/exynos9820_defconfig \
+            || echo 'CONFIG_VPNHIDE=y' >> arch/arm64/configs/exynos9820_defconfig
+
+          grep -q "^#define UDP_SEGMENT" include/uapi/linux/udp.h
+          grep -q "CONFIG_VPNHIDE" security/Makefile
+          test -f security/vpnhide/core.c
+
     
       - name: 🧩 Patch Kernel of NoMount
         shell: bash
