@@ -205,431 +205,261 @@ jobs:
           set -euo pipefail
           cd "$GITHUB_WORKSPACE"
 
-          # 1) UDP_SEGMENT / UDP GSO sockopt backport (4.14)
+          # 1) UDP_SEGMENT / UDP GSO sockopt backport (Linux 4.14)
           python3 - <<'PY'
-          #!/usr/bin/env python3
-          """Idempotent UDP_SEGMENT (UDP GSO) backport for Linux 4.14.
-          
-          Mirrors upstream:
-            bec1f6f69736 udp: generate gso with UDP_SEGMENT
-            2e8de8576343 udp: add gso segment cmsg
-          plus the software checksum fallback so TUN does not return -EIO.
+          import base64, pathlib, re
+          raw = """
+            IyEvdXNyL2Jpbi9lbnYgcHl0aG9uMwoiIiJJZGVtcG90ZW50IFVEUF9TRUdNRU5UIChVRFAgR1NP
+            KSBiYWNrcG9ydCBmb3IgTGludXggNC4xNC4KCk1pcnJvcnMgdXBzdHJlYW06CiAgYmVjMWY2ZjY5
+            NzM2IHVkcDogZ2VuZXJhdGUgZ3NvIHdpdGggVURQX1NFR01FTlQKICAyZThkZTg1NzYzNDMgdWRw
+            OiBhZGQgZ3NvIHNlZ21lbnQgY21zZwpwbHVzIHRoZSBzb2Z0d2FyZSBjaGVja3N1bSBmYWxsYmFj
+            ayBzbyBUVU4gZG9lcyBub3QgcmV0dXJuIC1FSU8uCiIiIgpmcm9tIF9fZnV0dXJlX18gaW1wb3J0
+            IGFubm90YXRpb25zCgppbXBvcnQgcmUKaW1wb3J0IHN5cwpmcm9tIHBhdGhsaWIgaW1wb3J0IFBh
+            dGgKClJPT1QgPSBQYXRoKHN5cy5hcmd2WzFdIGlmIGxlbihzeXMuYXJndikgPiAxIGVsc2UgIi4i
+            KS5yZXNvbHZlKCkKCgpkZWYgcmVhZChyZWw6IHN0cikgLT4gc3RyOgogICAgcCA9IFJPT1QgLyBy
+            ZWwKICAgIGlmIG5vdCBwLmlzX2ZpbGUoKToKICAgICAgICBzeXMuZXhpdChmIkZBSUwgbWlzc2lu
+            ZyB7cmVsfSIpCiAgICByZXR1cm4gcC5yZWFkX3RleHQoZW5jb2Rpbmc9InV0Zi04IiwgZXJyb3Jz
+            PSJzdXJyb2dhdGVlc2NhcGUiKQoKCmRlZiB3cml0ZShyZWw6IHN0ciwgdGV4dDogc3RyKSAtPiBO
+            b25lOgogICAgKFJPT1QgLyByZWwpLndyaXRlX3RleHQodGV4dCwgZW5jb2Rpbmc9InV0Zi04Iiwg
+            ZXJyb3JzPSJzdXJyb2dhdGVlc2NhcGUiKQoKCmRlZiBzdWIocmVsOiBzdHIsIHBhdHRlcm46IHN0
+            ciwgcmVwbDogc3RyLCAqLCBhbHJlYWR5OiBzdHIsIGZsYWdzOiBpbnQgPSAwKSAtPiBOb25lOgog
+            ICAgdGV4dCA9IHJlYWQocmVsKQogICAgaWYgYWxyZWFkeSBpbiB0ZXh0OgogICAgICAgIHByaW50
+            KGYic2tpcCB7cmVsfTogYWxyZWFkeSBhcHBsaWVkICh7YWxyZWFkeVs6NjBdfSkiKQogICAgICAg
+            IHJldHVybgogICAgbmV3LCBuID0gcmUuc3VibihwYXR0ZXJuLCByZXBsLCB0ZXh0LCBjb3VudD0x
+            LCBmbGFncz1mbGFncykKICAgIGlmIG4gIT0gMToKICAgICAgICBzeXMuZXhpdChmIkZBSUwge3Jl
+            bH06IGV4cGVjdGVkIDEgbWF0Y2gsIGdvdCB7bn0gZm9yIHtwYXR0ZXJuWzoxMjBdIXJ9IikKICAg
+            IHdyaXRlKHJlbCwgbmV3KQogICAgcHJpbnQoZiJvayAgIHtyZWx9IikKCgpHU09fSVBWNCA9IHIn
+            JycJaWYgKGNvcmstPmdzb19zaXplKSB7CgkJY29uc3QgaW50IGhsZW4gPSBza2JfbmV0d29ya19o
+            ZWFkZXJfbGVuKHNrYikgKwoJCQkJIHNpemVvZihzdHJ1Y3QgdWRwaGRyKTsKCgkJaWYgKGhsZW4g
+            KyBtaW4oZGF0YWxlbiwgKGludCljb3JrLT5nc29fc2l6ZSkgPiBjb3JrLT5mcmFnc2l6ZSkgewoJ
+            CQlrZnJlZV9za2Ioc2tiKTsKCQkJcmV0dXJuIC1FTVNHU0laRTsKCQl9CgkJaWYgKHNrYi0+bGVu
+            ID4gY29yay0+Z3NvX3NpemUgKiBVRFBfTUFYX1NFR01FTlRTKSB7CgkJCWtmcmVlX3NrYihza2Ip
+            OwoJCQlyZXR1cm4gLUVJTlZBTDsKCQl9CgkJaWYgKHNrLT5za19ub19jaGVja190eCB8fCBpc191
+            ZHBsaXRlIHx8IGRzdF94ZnJtKHNrYl9kc3Qoc2tiKSkpIHsKCQkJa2ZyZWVfc2tiKHNrYik7CgkJ
+            CXJldHVybiAtRUlPOwoJCX0KCQlpZiAoZGF0YWxlbiA+IGNvcmstPmdzb19zaXplKSB7CgkJCXNr
+            Yl9zaGluZm8oc2tiKS0+Z3NvX3NpemUgPSBjb3JrLT5nc29fc2l6ZTsKCQkJc2tiX3NoaW5mbyhz
+            a2IpLT5nc29fdHlwZSA9IFNLQl9HU09fVURQX0w0OwoJCQlza2Jfc2hpbmZvKHNrYiktPmdzb19z
+            ZWdzID0gRElWX1JPVU5EX1VQKGRhdGFsZW4sCgkJCQkJCQkJIGNvcmstPmdzb19zaXplKTsKCQl9
+            CgkJaWYgKHNrYi0+aXBfc3VtbWVkID09IENIRUNLU1VNX1BBUlRJQUwpCgkJCWdvdG8gY3N1bV9w
+            YXJ0aWFsOwoJCWdvdG8gc2VuZDsKCX0KCicnJwoKR1NPX0lQVjYgPSByJycnCWlmIChjb3JrLT5n
+            c29fc2l6ZSkgewoJCWNvbnN0IGludCBobGVuID0gc2tiX25ldHdvcmtfaGVhZGVyX2xlbihza2Ip
+            ICsKCQkJCSBzaXplb2Yoc3RydWN0IHVkcGhkcik7CgoJCWlmIChobGVuICsgbWluKGRhdGFsZW4s
+            IChpbnQpY29yay0+Z3NvX3NpemUpID4gY29yay0+ZnJhZ3NpemUpIHsKCQkJa2ZyZWVfc2tiKHNr
+            Yik7CgkJCXJldHVybiAtRU1TR1NJWkU7CgkJfQoJCWlmIChza2ItPmxlbiA+IGNvcmstPmdzb19z
+            aXplICogVURQX01BWF9TRUdNRU5UUykgewoJCQlrZnJlZV9za2Ioc2tiKTsKCQkJcmV0dXJuIC1F
+            SU5WQUw7CgkJfQoJCWlmICh1ZHBfc2soc2spLT5ub19jaGVjazZfdHggfHwgaXNfdWRwbGl0ZSB8
+            fAoJCSAgICBkc3RfeGZybShza2JfZHN0KHNrYikpKSB7CgkJCWtmcmVlX3NrYihza2IpOwoJCQly
+            ZXR1cm4gLUVJTzsKCQl9CgkJaWYgKGRhdGFsZW4gPiBjb3JrLT5nc29fc2l6ZSkgewoJCQlza2Jf
+            c2hpbmZvKHNrYiktPmdzb19zaXplID0gY29yay0+Z3NvX3NpemU7CgkJCXNrYl9zaGluZm8oc2ti
+            KS0+Z3NvX3R5cGUgPSBTS0JfR1NPX1VEUF9MNDsKCQkJc2tiX3NoaW5mbyhza2IpLT5nc29fc2Vn
+            cyA9IERJVl9ST1VORF9VUChkYXRhbGVuLAoJCQkJCQkJCSBjb3JrLT5nc29fc2l6ZSk7CgkJfQoJ
+            CWlmIChza2ItPmlwX3N1bW1lZCA9PSBDSEVDS1NVTV9QQVJUSUFMKQoJCQlnb3RvIGNzdW1fcGFy
+            dGlhbDsKCQlnb3RvIHNlbmQ7Cgl9CgonJycKCkNNU0cgPSByJycnc3RhdGljIGludCBfX3VkcF9j
+            bXNnX3NlbmQoc3RydWN0IGNtc2doZHIgKmNtc2csIHUxNiAqZ3NvX3NpemUpCnsKCXN3aXRjaCAo
+            Y21zZy0+Y21zZ190eXBlKSB7CgljYXNlIFVEUF9TRUdNRU5UOgoJCWlmIChjbXNnLT5jbXNnX2xl
+            biAhPSBDTVNHX0xFTihzaXplb2YoX191MTYpKSkKCQkJcmV0dXJuIC1FSU5WQUw7CgkJKmdzb19z
+            aXplID0gKihfX3UxNiAqKUNNU0dfREFUQShjbXNnKTsKCQlyZXR1cm4gMDsKCWRlZmF1bHQ6CgkJ
+            cmV0dXJuIC1FSU5WQUw7Cgl9Cn0KCmludCB1ZHBfY21zZ19zZW5kKHN0cnVjdCBzb2NrICpzaywg
+            c3RydWN0IG1zZ2hkciAqbXNnLCB1MTYgKmdzb19zaXplKQp7CglzdHJ1Y3QgY21zZ2hkciAqY21z
+            ZzsKCWJvb2wgbmVlZF9pcCA9IGZhbHNlOwoJaW50IGVycjsKCglmb3JfZWFjaF9jbXNnaGRyKGNt
+            c2csIG1zZykgewoJCWlmICghQ01TR19PSyhtc2csIGNtc2cpKQoJCQlyZXR1cm4gLUVJTlZBTDsK
+            CgkJaWYgKGNtc2ctPmNtc2dfbGV2ZWwgIT0gU09MX1VEUCkgewoJCQluZWVkX2lwID0gdHJ1ZTsK
+            CQkJY29udGludWU7CgkJfQoKCQllcnIgPSBfX3VkcF9jbXNnX3NlbmQoY21zZywgZ3NvX3NpemUp
+            OwoJCWlmIChlcnIpCgkJCXJldHVybiBlcnI7Cgl9CgoJcmV0dXJuIG5lZWRfaXA7Cn0KRVhQT1JU
+            X1NZTUJPTF9HUEwodWRwX2Ntc2dfc2VuZCk7CgonJycKCgpkZWYgbWFpbigpIC0+IE5vbmU6CiAg
+            ICBzdWIoCiAgICAgICAgImluY2x1ZGUvdWFwaS9saW51eC91ZHAuaCIsCiAgICAgICAgciIoI2Rl
+            ZmluZSBVRFBfTk9fQ0hFQ0s2X1JYXHMrMTAyW15cbl0qXG4pIiwKICAgICAgICByIlwxI2RlZmlu
+            ZSBVRFBfU0VHTUVOVAkxMDMJLyogU2V0IEdTTyBzZWdtZW50YXRpb24gc2l6ZSAqL1xuIiwKICAg
+            ICAgICBhbHJlYWR5PSIjZGVmaW5lIFVEUF9TRUdNRU5UIiwKICAgICkKICAgIHN1YigKICAgICAg
+            ICAiaW5jbHVkZS9saW51eC91ZHAuaCIsCiAgICAgICAgciIoX191MTZccytsZW47XHMqL1wqW15c
+            bl0qcGVuZGluZyBmcmFtZXNbXlxuXSpcKi9cbikiLAogICAgICAgIHIiXDEJX191MTYJCSBnc29f
+            c2l6ZTsJLyogVURQIEdTTyBzZWdtZW50IHNpemUgKFVEUF9TRUdNRU5UKSAqL1xuIiwKICAgICAg
+            ICBhbHJlYWR5PSJnc29fc2l6ZTsiLAogICAgKQogICAgc3ViKAogICAgICAgICJpbmNsdWRlL25l
+            dC9pbmV0X3NvY2suaCIsCiAgICAgICAgciIoY2hhclxzK3ByaW9yaXR5O1xuKShcfTtcblxuc3Ry
+            dWN0IGluZXRfY29ya19mdWxsKSIsCiAgICAgICAgciJcMQlfX3UxNgkJCWdzb19zaXplO1xuXDIi
+            LAogICAgICAgIGFscmVhZHk9Imdzb19zaXplOyIsCiAgICApCiAgICBzdWIoCiAgICAgICAgImlu
+            Y2x1ZGUvbmV0L2lwLmgiLAogICAgICAgIHIiKGNoYXJccytwcmlvcml0eTtcbikoXH07XG5cbiNk
+            ZWZpbmUgSVBDQlwoc2tiXCkpIiwKICAgICAgICByIlwxCV9fdTE2CQkJZ3NvX3NpemU7XG5cMiIs
+            CiAgICAgICAgYWxyZWFkeT0iZ3NvX3NpemU7IiwKICAgICkKICAgIHN1YigKICAgICAgICAiaW5j
+            bHVkZS9uZXQvaXB2Ni5oIiwKICAgICAgICByIihfX3M4XHMrZG9udGZyYWc7XG4pKFx0c3RydWN0
+            IGlwdjZfdHhvcHRpb25zIFwqb3B0OykiLAogICAgICAgIHIiXDEJX191MTYgZ3NvX3NpemU7XG5c
+            MiIsCiAgICAgICAgYWxyZWFkeT0iZ3NvX3NpemU7IiwKICAgICkKICAgIHN1YigKICAgICAgICAi
+            aW5jbHVkZS9uZXQvdWRwLmgiLAogICAgICAgIHIiKHVuc2lnbmVkIGludCBtc3MsIF9fc3VtMTYg
+            Y2hlY2tcKTtcbikiLAogICAgICAgIHIiXDFcbiNkZWZpbmUgVURQX01BWF9TRUdNRU5UUwkoMSA8
+            PCA2VSlcbiIKICAgICAgICByImludCB1ZHBfY21zZ19zZW5kKHN0cnVjdCBzb2NrICpzaywgc3Ry
+            dWN0IG1zZ2hkciAqbXNnLCB1MTYgKmdzb19zaXplKTtcbiIsCiAgICAgICAgYWxyZWFkeT0idWRw
+            X2Ntc2dfc2VuZCgiLAogICAgKQogICAgc3ViKAogICAgICAgICJpbmNsdWRlL2xpbnV4L25ldGRl
+            dl9mZWF0dXJlcy5oIiwKICAgICAgICByIihORVRJRl9GX0dTT19VRFBfQklULFxzKi9cKiBcLlwu
+            XC4gVUZPLCBkZXByZWNhdGVkIGV4Y2VwdCB0dW50YXAgXCovXG4pIgogICAgICAgIHIiKFxzKi9c
+            KlwqL05FVElGX0ZfR1NPX0xBU1QgPVxzKi9cKiBsYXN0IGJpdCwgc2VlIEdTT19NQVNLIFwqL1xu
+            KSIKICAgICAgICByIihccypORVRJRl9GX0dTT19VRFBfQklULCkiLAogICAgICAgIHIiXDEJTkVU
+            SUZfRl9HU09fVURQX0w0X0JJVCwJCS8qIC4uLiBVRFAgcGF5bG9hZCBHU08gKG5vdCBVRk8pICov
+            XG4iCiAgICAgICAgciJcMgkJTkVUSUZfRl9HU09fVURQX0w0X0JJVCwiLAogICAgICAgIGFscmVh
+            ZHk9Ik5FVElGX0ZfR1NPX1VEUF9MNF9CSVQiLAogICAgKQogICAgc3ViKAogICAgICAgICJpbmNs
+            dWRlL2xpbnV4L25ldGRldl9mZWF0dXJlcy5oIiwKICAgICAgICByIigjZGVmaW5lIE5FVElGX0Zf
+            R1NPX1VEUFxzK19fTkVUSUZfRlwoR1NPX1VEUFwpXG4pIiwKICAgICAgICByIlwxI2RlZmluZSBO
+            RVRJRl9GX0dTT19VRFBfTDQJX19ORVRJRl9GKEdTT19VRFBfTDQpXG4iLAogICAgICAgIGFscmVh
+            ZHk9IiNkZWZpbmUgTkVUSUZfRl9HU09fVURQX0w0IiwKICAgICkKICAgIHN1YigKICAgICAgICAi
+            aW5jbHVkZS9saW51eC9uZXRkZXZfZmVhdHVyZXMuaCIsCiAgICAgICAgciIoI2RlZmluZSBORVRJ
+            Rl9GX0dTT19TT0ZUV0FSRVxzK1woTkVUSUZfRl9BTExfVFNPIFx8IFxcXG5ccytORVRJRl9GX0dT
+            T19TQ1RQXCkpIiwKICAgICAgICByIlwxCQkJCSBORVRJRl9GX0dTT19TQ1RQIHwgTkVUSUZfRl9H
+            U09fVURQX0w0KSIsCiAgICAgICAgYWxyZWFkeT0iTkVUSUZfRl9HU09fVURQX0w0KSIsCiAgICAp
+            CiAgICBzdWIoCiAgICAgICAgImluY2x1ZGUvbGludXgvbmV0ZGV2aWNlLmgiLAogICAgICAgIHIi
+            KEJVSUxEX0JVR19PTlwoU0tCX0dTT19VRFAgIT0gXChORVRJRl9GX0dTT19VRFAgPj4gTkVUSUZf
+            Rl9HU09fU0hJRlRcKVwpO1xuKSIsCiAgICAgICAgciJcMQlCVUlMRF9CVUdfT04oU0tCX0dTT19V
+            RFBfTDQgIT0gKE5FVElGX0ZfR1NPX1VEUF9MNCA+PiBORVRJRl9GX0dTT19TSElGVCkpO1xuIiwK
+            ICAgICAgICBhbHJlYWR5PSJTS0JfR1NPX1VEUF9MNCAhPSAoTkVUSUZfRl9HU09fVURQX0w0IiwK
+            ICAgICkKICAgIHN1YigKICAgICAgICAibmV0L2lwdjQvaXBfb3V0cHV0LmMiLAogICAgICAgIHIi
+            KGNvcmstPnR4X2ZsYWdzID0gaXBjLT50eF9mbGFncztcbikoXG5cdHJldHVybiAwOykiLAogICAg
+            ICAgIHIiXDEJY29yay0+Z3NvX3NpemUgPSBpcGMtPmdzb19zaXplO1xuXDIiLAogICAgICAgIGFs
+            cmVhZHk9ImNvcmstPmdzb19zaXplID0gaXBjLT5nc29fc2l6ZSIsCiAgICApCiAgICBzdWIoCiAg
+            ICAgICAgIm5ldC9pcHY2L2lwNl9vdXRwdXQuYyIsCiAgICAgICAgciIoY29yay0+YmFzZS5sZW5n
+            dGggPSAwO1xuKShcblx0cmV0dXJuIDA7KSIsCiAgICAgICAgciJcMQljb3JrLT5iYXNlLmdzb19z
+            aXplID0gaXBjNi0+Z3NvX3NpemU7XG5cMiIsCiAgICAgICAgYWxyZWFkeT0iY29yay0+YmFzZS5n
+            c29fc2l6ZSA9IGlwYzYtPmdzb19zaXplIiwKICAgICkKCiAgICAjIGlwdjQgdWRwX3NlbmRfc2ti
+            CiAgICBzdWIoCiAgICAgICAgIm5ldC9pcHY0L3VkcC5jIiwKICAgICAgICByInN0YXRpYyBpbnQg
+            dWRwX3NlbmRfc2tiXChzdHJ1Y3Qgc2tfYnVmZiBcKnNrYiwgc3RydWN0IGZsb3dpNCBcKmZsNFwp
+            XG4iLAogICAgICAgICJzdGF0aWMgaW50IHVkcF9zZW5kX3NrYihzdHJ1Y3Qgc2tfYnVmZiAqc2ti
+            LCBzdHJ1Y3QgZmxvd2k0ICpmbDQsXG4iCiAgICAgICAgIgkJCXN0cnVjdCBpbmV0X2NvcmsgKmNv
+            cmspXG4iLAogICAgICAgIGFscmVhZHk9InN0cnVjdCBpbmV0X2NvcmsgKmNvcmspIiwKICAgICkK
+            ICAgIHN1YigKICAgICAgICAibmV0L2lwdjQvdWRwLmMiLAogICAgICAgIHIiKGludCBsZW4gPSBz
+            a2ItPmxlbiAtIG9mZnNldDtcbikoXHRfX3dzdW0gY3N1bSA9IDA7KSIsCiAgICAgICAgciJcMQlp
+            bnQgZGF0YWxlbiA9IGxlbiAtIHNpemVvZigqdWgpO1xuXDIiLAogICAgICAgIGFscmVhZHk9Imlu
+            dCBkYXRhbGVuID0gbGVuIC0gc2l6ZW9mKCp1aCk7IiwKICAgICkKICAgIHN1YigKICAgICAgICAi
+            bmV0L2lwdjQvdWRwLmMiLAogICAgICAgIHIiKHVoLT5sZW4gPSBodG9uc1wobGVuXCk7XG5cdHVo
+            LT5jaGVjayA9IDA7XG5cbikoXHRpZiBcKGlzX3VkcGxpdGVcKSkiLAogICAgICAgIHIiXDEiICsg
+            R1NPX0lQVjQgKyByIlwyIiwKICAgICAgICBhbHJlYWR5PSJpZiAoY29yay0+Z3NvX3NpemUpIiwK
+            ICAgICkKICAgIHN1YigKICAgICAgICAibmV0L2lwdjQvdWRwLmMiLAogICAgICAgIHIiKGVsc2Ug
+            aWYgXChza2ItPmlwX3N1bW1lZCA9PSBDSEVDS1NVTV9QQVJUSUFMXCkgXHsgL1wqIFVEUCBoYXJk
+            d2FyZSBjc3VtIFwqL1xuXG4pIgogICAgICAgIHIiKFx0XHR1ZHA0X2h3Y3N1bVwoc2tiLCBmbDQt
+            PnNhZGRyLCBmbDQtPmRhZGRyXCk7KSIsCiAgICAgICAgciJcMWNzdW1fcGFydGlhbDpcblxuXDIi
+            LAogICAgICAgIGFscmVhZHk9IlxuY3N1bV9wYXJ0aWFsOlxuIiwKICAgICkKICAgIHN1YigKICAg
+            ICAgICAibmV0L2lwdjQvdWRwLmMiLAogICAgICAgIHIiZXJyID0gdWRwX3NlbmRfc2tiXChza2Is
+            IGZsNFwpOyIsCiAgICAgICAgImVyciA9IHVkcF9zZW5kX3NrYihza2IsIGZsNCwgJmluZXQtPmNv
+            cmsuYmFzZSk7IiwKICAgICAgICBhbHJlYWR5PSJ1ZHBfc2VuZF9za2Ioc2tiLCBmbDQsICZpbmV0
+            LT5jb3JrLmJhc2UpIiwKICAgICkKICAgIHN1YigKICAgICAgICAibmV0L2lwdjQvdWRwLmMiLAog
+            ICAgICAgIHIiKEVYUE9SVF9TWU1CT0xcKHVkcF9wdXNoX3BlbmRpbmdfZnJhbWVzXCk7XG5cbiko
+            aW50IHVkcF9zZW5kbXNnXCgpIiwKICAgICAgICByIlwxIiArIENNU0cgKyByIlwyIiwKICAgICAg
+            ICBhbHJlYWR5PSJpbnQgdWRwX2Ntc2dfc2VuZChzdHJ1Y3Qgc29jayAqc2ssIHN0cnVjdCBtc2do
+            ZHIgKm1zZywgdTE2ICpnc29fc2l6ZSkiLAogICAgKQogICAgc3ViKAogICAgICAgICJuZXQvaXB2
+            NC91ZHAuYyIsCiAgICAgICAgciIoaXBjLnRvcyA9IC0xO1xuKSIsCiAgICAgICAgciJcMQlpcGMu
+            Z3NvX3NpemUgPSB1cC0+Z3NvX3NpemU7XG4iLAogICAgICAgIGFscmVhZHk9ImlwYy5nc29fc2l6
+            ZSA9IHVwLT5nc29fc2l6ZSIsCiAgICApCiAgICBzdWIoCiAgICAgICAgIm5ldC9pcHY0L3VkcC5j
+            IiwKICAgICAgICByImVyciA9IGlwX2Ntc2dfc2VuZFwoc2ssIG1zZywgJmlwYywgc2stPnNrX2Zh
+            bWlseSA9PSBBRl9JTkVUNlwpO1xuIgogICAgICAgIHIiXHRcdGlmIFwodW5saWtlbHlcKGVyclwp
+            XCkgXHsiLAogICAgICAgICJlcnIgPSB1ZHBfY21zZ19zZW5kKHNrLCBtc2csICZpcGMuZ3NvX3Np
+            emUpO1xuIgogICAgICAgICIJCWlmIChlcnIgPiAwKVxuIgogICAgICAgICIJCQllcnIgPSBpcF9j
+            bXNnX3NlbmQoc2ssIG1zZywgJmlwYyxcbiIKICAgICAgICAiCQkJCQkgICBzay0+c2tfZmFtaWx5
+            ID09IEFGX0lORVQ2KTtcbiIKICAgICAgICAiCQlpZiAodW5saWtlbHkoZXJyIDwgMCkpIHsiLAog
+            ICAgICAgIGFscmVhZHk9InVkcF9jbXNnX3NlbmQoc2ssIG1zZywgJmlwYy5nc29fc2l6ZSkiLAog
+            ICAgKQogICAgc3ViKAogICAgICAgICJuZXQvaXB2NC91ZHAuYyIsCiAgICAgICAgciIoaWYgXCgh
+            Y29ya3JlcVwpIFx7XG4pIgogICAgICAgIHIiKFx0XHRza2IgPSBpcF9tYWtlX3NrYlwoc2ssIGZs
+            NCwgZ2V0ZnJhZywgbXNnLCB1bGVuLFxuIgogICAgICAgIHIiXHRcdFx0XHQgIHNpemVvZlwoc3Ry
+            dWN0IHVkcGhkclwpLCAmaXBjLCAmcnQsXG4iCiAgICAgICAgciJcdFx0XHRcdCAgbXNnLT5tc2df
+            ZmxhZ3NcKTtcbiIKICAgICAgICByIlx0XHRlcnIgPSBQVFJfRVJSXChza2JcKTtcbiIKICAgICAg
+            ICByIlx0XHRpZiBcKCFJU19FUlJfT1JfTlVMTFwoc2tiXClcKVxuIgogICAgICAgIHIiXHRcdFx0
+            ZXJyID0gdWRwX3NlbmRfc2tiXChza2IsIGZsNFwpOykiLAogICAgICAgIHIiXDEJCXN0cnVjdCBp
+            bmV0X2NvcmsgY29yaztcbiIKICAgICAgICByIlxuIgogICAgICAgIHIiCQlza2IgPSBpcF9tYWtl
+            X3NrYihzaywgZmw0LCBnZXRmcmFnLCBtc2csIHVsZW4sXG4iCiAgICAgICAgciIJCQkJICBzaXpl
+            b2Yoc3RydWN0IHVkcGhkciksICZpcGMsICZydCxcbiIKICAgICAgICByIgkJCQkgIG1zZy0+bXNn
+            X2ZsYWdzKTtcbiIKICAgICAgICByIgkJZXJyID0gUFRSX0VSUihza2IpO1xuIgogICAgICAgIHIi
+            CQlpZiAoIUlTX0VSUl9PUl9OVUxMKHNrYikpIHtcbiIKICAgICAgICByIgkJCWNvcmsuZ3NvX3Np
+            emUgPSBpcGMuZ3NvX3NpemU7XG4iCiAgICAgICAgciIJCQljb3JrLmZyYWdzaXplID0gaXBfc2tf
+            dXNlX3BtdHUoc2spID9cbiIKICAgICAgICByIgkJCQlkc3RfbXR1KHNrYl9kc3Qoc2tiKSkgOlxu
+            IgogICAgICAgIHIiCQkJCXNrYl9kc3Qoc2tiKS0+ZGV2LT5tdHU7XG4iCiAgICAgICAgciIJCQll
+            cnIgPSB1ZHBfc2VuZF9za2Ioc2tiLCBmbDQsICZjb3JrKTtcbiIKICAgICAgICByIgkJfSIsCiAg
+            ICAgICAgYWxyZWFkeT0iY29yay5nc29fc2l6ZSA9IGlwYy5nc29fc2l6ZSIsCiAgICApCiAgICBz
+            dWIoCiAgICAgICAgIm5ldC9pcHY0L3VkcC5jIiwKICAgICAgICByIihjYXNlIFVEUF9OT19DSEVD
+            SzZfUlg6XG5cdFx0dXAtPm5vX2NoZWNrNl9yeCA9IHZhbGJvb2w7XG5cdFx0YnJlYWs7XG5cbiki
+            LAogICAgICAgIHIiXDEJY2FzZSBVRFBfU0VHTUVOVDpcbiIKICAgICAgICByIgkJaWYgKHZhbCA8
+            IDAgfHwgdmFsID4gVVNIUlRfTUFYKVxuIgogICAgICAgIHIiCQkJcmV0dXJuIC1FSU5WQUw7XG4i
+            CiAgICAgICAgciIJCXVwLT5nc29fc2l6ZSA9IHZhbDtcbiIKICAgICAgICByIgkJYnJlYWs7XG5c
+            biIsCiAgICAgICAgYWxyZWFkeT0idXAtPmdzb19zaXplID0gdmFsIiwKICAgICkKICAgIHN1YigK
+            ICAgICAgICAibmV0L2lwdjQvdWRwLmMiLAogICAgICAgIHIiKGNhc2UgVURQX05PX0NIRUNLNl9S
+            WDpcblx0XHR2YWwgPSB1cC0+bm9fY2hlY2s2X3J4O1xuXHRcdGJyZWFrO1xuXG4pIiwKICAgICAg
+            ICByIlwxCWNhc2UgVURQX1NFR01FTlQ6XG4iCiAgICAgICAgciIJCXZhbCA9IHVwLT5nc29fc2l6
+            ZTtcbiIKICAgICAgICByIgkJYnJlYWs7XG5cbiIsCiAgICAgICAgYWxyZWFkeT0idmFsID0gdXAt
+            Pmdzb19zaXplIiwKICAgICkKCiAgICAjIGlwdjYKICAgIHN1YigKICAgICAgICAibmV0L2lwdjYv
+            dWRwLmMiLAogICAgICAgIHIic3RhdGljIGludCB1ZHBfdjZfc2VuZF9za2JcKHN0cnVjdCBza19i
+            dWZmIFwqc2tiLCBzdHJ1Y3QgZmxvd2k2IFwqZmw2XClcbiIsCiAgICAgICAgInN0YXRpYyBpbnQg
+            dWRwX3Y2X3NlbmRfc2tiKHN0cnVjdCBza19idWZmICpza2IsIHN0cnVjdCBmbG93aTYgKmZsNixc
+            biIKICAgICAgICAiCQkJICAgc3RydWN0IGluZXRfY29yayAqY29yaylcbiIsCiAgICAgICAgYWxy
+            ZWFkeT0ic3RydWN0IGluZXRfY29yayAqY29yaykiLAogICAgKQogICAgc3ViKAogICAgICAgICJu
+            ZXQvaXB2Ni91ZHAuYyIsCiAgICAgICAgciIoaW50IG9mZnNldCA9IHNrYl90cmFuc3BvcnRfb2Zm
+            c2V0XChza2JcKTtcbiIKICAgICAgICByIlx0aW50IGxlbiA9IHNrYi0+bGVuIC0gb2Zmc2V0O1xu
+            KSIsCiAgICAgICAgciJcMQlpbnQgZGF0YWxlbiA9IGxlbiAtIHNpemVvZigqdWgpO1xuIiwKICAg
+            ICAgICBhbHJlYWR5PSJpbnQgZGF0YWxlbiA9IGxlbiAtIHNpemVvZigqdWgpOyIsCiAgICApCiAg
+            ICBzdWIoCiAgICAgICAgIm5ldC9pcHY2L3VkcC5jIiwKICAgICAgICByIih1aC0+bGVuID0gaHRv
+            bnNcKGxlblwpO1xuXHR1aC0+Y2hlY2sgPSAwO1xuXG4pKFx0aWYgXChpc191ZHBsaXRlXClcblx0
+            XHRjc3VtID0gdWRwbGl0ZV9jc3VtXChza2JcKTspIiwKICAgICAgICByIlwxIiArIEdTT19JUFY2
+            ICsgciJcMiIsCiAgICAgICAgYWxyZWFkeT0iaWYgKGNvcmstPmdzb19zaXplKSIsCiAgICApCiAg
+            ICBzdWIoCiAgICAgICAgIm5ldC9pcHY2L3VkcC5jIiwKICAgICAgICByIihlbHNlIGlmIFwoc2ti
+            LT5pcF9zdW1tZWQgPT0gQ0hFQ0tTVU1fUEFSVElBTFwpIFx7IC9cKiBVRFAgaGFyZHdhcmUgY3N1
+            bSBcKi9cbikiCiAgICAgICAgciIoXHRcdHVkcDZfaHdjc3VtX291dGdvaW5nXChzaywgc2tiLCAm
+            Zmw2LT5zYWRkciwgJmZsNi0+ZGFkZHIsIGxlblwpOykiLAogICAgICAgIHIiXDFjc3VtX3BhcnRp
+            YWw6XG5cMiIsCiAgICAgICAgYWxyZWFkeT0iXG5jc3VtX3BhcnRpYWw6XG4iLAogICAgKQogICAg
+            c3ViKAogICAgICAgICJuZXQvaXB2Ni91ZHAuYyIsCiAgICAgICAgciJlcnIgPSB1ZHBfdjZfc2Vu
+            ZF9za2JcKHNrYiwgJmZsNlwpOyIsCiAgICAgICAgImVyciA9IHVkcF92Nl9zZW5kX3NrYihza2Is
+            ICZmbDYsICZpbmV0X3NrKHNrKS0+Y29yay5iYXNlKTsiLAogICAgICAgIGFscmVhZHk9InVkcF92
+            Nl9zZW5kX3NrYihza2IsICZmbDYsICZpbmV0X3NrKHNrKS0+Y29yay5iYXNlKSIsCiAgICApCiAg
+            ICBzdWIoCiAgICAgICAgIm5ldC9pcHY2L3VkcC5jIiwKICAgICAgICByIihpcGM2LmRvbnRmcmFn
+            ID0gLTE7XG4pIiwKICAgICAgICByIlwxCWlwYzYuZ3NvX3NpemUgPSB1cC0+Z3NvX3NpemU7XG4i
+            LAogICAgICAgIGFscmVhZHk9ImlwYzYuZ3NvX3NpemUgPSB1cC0+Z3NvX3NpemUiLAogICAgKQog
+            ICAgc3ViKAogICAgICAgICJuZXQvaXB2Ni91ZHAuYyIsCiAgICAgICAgciJlcnIgPSBpcDZfZGF0
+            YWdyYW1fc2VuZF9jdGxcKHNvY2tfbmV0XChza1wpLCBzaywgbXNnLCAmZmw2LCAmaXBjNiwgJnNv
+            Y2tjXCk7IiwKICAgICAgICAiZXJyID0gdWRwX2Ntc2dfc2VuZChzaywgbXNnLCAmaXBjNi5nc29f
+            c2l6ZSk7XG4iCiAgICAgICAgIgkJaWYgKGVyciA+IDApXG4iCiAgICAgICAgIgkJCWVyciA9IGlw
+            Nl9kYXRhZ3JhbV9zZW5kX2N0bChzb2NrX25ldChzayksIHNrLCBtc2csICZmbDYsXG4iCiAgICAg
+            ICAgIgkJCQkJCSAgICAmaXBjNiwgJnNvY2tjKTsiLAogICAgICAgIGFscmVhZHk9InVkcF9jbXNn
+            X3NlbmQoc2ssIG1zZywgJmlwYzYuZ3NvX3NpemUpIiwKICAgICkKICAgIHN1YigKICAgICAgICAi
+            bmV0L2lwdjYvdWRwLmMiLAogICAgICAgIHIiKGlmIFwoIWNvcmtyZXFcKSBce1xuXHRcdHN0cnVj
+            dCBza19idWZmIFwqc2tiO1xuXG4pIgogICAgICAgIHIiKFx0XHRza2IgPSBpcDZfbWFrZV9za2Jc
+            KHNrLCBnZXRmcmFnLCBtc2csIHVsZW4sXG4iCiAgICAgICAgciJcdFx0XHRcdCAgIHNpemVvZlwo
+            c3RydWN0IHVkcGhkclwpLCAmaXBjNixcbiIKICAgICAgICByIlx0XHRcdFx0ICAgJmZsNiwgXChz
+            dHJ1Y3QgcnQ2X2luZm8gXCpcKWRzdCxcbiIKICAgICAgICByIlx0XHRcdFx0ICAgbXNnLT5tc2df
+            ZmxhZ3MsICZzb2NrY1wpO1xuIgogICAgICAgIHIiXHRcdGVyciA9IFBUUl9FUlJcKHNrYlwpO1xu
+            IgogICAgICAgIHIiXHRcdGlmIFwoIUlTX0VSUl9PUl9OVUxMXChza2JcKVwpXG4iCiAgICAgICAg
+            ciJcdFx0XHRlcnIgPSB1ZHBfdjZfc2VuZF9za2JcKHNrYiwgJmZsNlwpOykiLAogICAgICAgIHIi
+            XDEJCXN0cnVjdCBpbmV0X2NvcmsgY29yaztcbiIKICAgICAgICByIlxuIgogICAgICAgIHIiCQlz
+            a2IgPSBpcDZfbWFrZV9za2Ioc2ssIGdldGZyYWcsIG1zZywgdWxlbixcbiIKICAgICAgICByIgkJ
+            CQkgICBzaXplb2Yoc3RydWN0IHVkcGhkciksICZpcGM2LFxuIgogICAgICAgIHIiCQkJCSAgICZm
+            bDYsIChzdHJ1Y3QgcnQ2X2luZm8gKilkc3QsXG4iCiAgICAgICAgciIJCQkJICAgbXNnLT5tc2df
+            ZmxhZ3MsICZzb2NrYyk7XG4iCiAgICAgICAgciIJCWVyciA9IFBUUl9FUlIoc2tiKTtcbiIKICAg
+            ICAgICByIgkJaWYgKCFJU19FUlJfT1JfTlVMTChza2IpKSB7XG4iCiAgICAgICAgciIJCQljb3Jr
+            Lmdzb19zaXplID0gaXBjNi5nc29fc2l6ZTtcbiIKICAgICAgICByIgkJCWNvcmsuZnJhZ3NpemUg
+            PSBkc3RfbXR1KHNrYl9kc3Qoc2tiKSk7XG4iCiAgICAgICAgciIJCQllcnIgPSB1ZHBfdjZfc2Vu
+            ZF9za2Ioc2tiLCAmZmw2LCAmY29yayk7XG4iCiAgICAgICAgciIJCX0iLAogICAgICAgIGFscmVh
+            ZHk9ImNvcmsuZ3NvX3NpemUgPSBpcGM2Lmdzb19zaXplIiwKICAgICkKCiAgICBzdWIoCiAgICAg
+            ICAgIm5ldC9pcHY0L3VkcF9vZmZsb2FkLmMiLAogICAgICAgIHIiKGlmIFwoIWNhbl9jaGVja3N1
+            bV9wcm90b2NvbFwoZmVhdHVyZXMsIGh0b25zXChFVEhfUF9JUFwpXClcKVxuKSIKICAgICAgICBy
+            Ilx0XHRyZXR1cm4gRVJSX1BUUlwoLUVJT1wpOyIsCiAgICAgICAgciJcMQkJZmVhdHVyZXMgJj0g
+            fihORVRJRl9GX0NTVU1fTUFTSyB8IE5FVElGX0ZfR1NPX01BU0spOyIsCiAgICAgICAgYWxyZWFk
+            eT0iZmVhdHVyZXMgJj0gfihORVRJRl9GX0NTVU1fTUFTSyB8IE5FVElGX0ZfR1NPX01BU0spIiwK
+            ICAgICkKICAgIHN1YigKICAgICAgICAibmV0L2lwdjYvdWRwX29mZmxvYWQuYyIsCiAgICAgICAg
+            ciIoaWYgXCghY2FuX2NoZWNrc3VtX3Byb3RvY29sXChmZWF0dXJlcywgaHRvbnNcKEVUSF9QX0lQ
+            VjZcKVwpXClcbikiCiAgICAgICAgciJcdFx0cmV0dXJuIEVSUl9QVFJcKC1FSU9cKTsiLAogICAg
+            ICAgIHIiXDEJCWZlYXR1cmVzICY9IH4oTkVUSUZfRl9DU1VNX01BU0sgfCBORVRJRl9GX0dTT19N
+            QVNLKTsiLAogICAgICAgIGFscmVhZHk9ImZlYXR1cmVzICY9IH4oTkVUSUZfRl9DU1VNX01BU0sg
+            fCBORVRJRl9GX0dTT19NQVNLKSIsCiAgICApCgogICAgbGVmdG92ZXI0ID0gcmUuZmluZGFsbChy
+            InVkcF9zZW5kX3NrYlwoW147XSpmbDRcKTsiLCByZWFkKCJuZXQvaXB2NC91ZHAuYyIpKQogICAg
+            bGVmdG92ZXI0ID0gW3ggZm9yIHggaW4gbGVmdG92ZXI0IGlmICIsICYiIG5vdCBpbiB4IGFuZCAi
+            LCBjb3JrIiBub3QgaW4geF0KICAgIGlmIGxlZnRvdmVyNDoKICAgICAgICBzeXMuZXhpdChmIkZB
+            SUwgbGVmdG92ZXIgMi1hcmcgdWRwX3NlbmRfc2tiOiB7bGVmdG92ZXI0fSIpCiAgICBsZWZ0b3Zl
+            cjYgPSByZS5maW5kYWxsKHIidWRwX3Y2X3NlbmRfc2tiXChbXjtdKiZmbDZcKTsiLCByZWFkKCJu
+            ZXQvaXB2Ni91ZHAuYyIpKQogICAgbGVmdG92ZXI2ID0gW3ggZm9yIHggaW4gbGVmdG92ZXI2IGlm
+            ICIsICYiIG5vdCBpbiB4LnNwbGl0KCImZmw2IilbLTFdXQogICAgbGVmdG92ZXI2ID0gW3ggZm9y
+            IHggaW4gbGVmdG92ZXI2IGlmIHguc3RyaXAoKS5lbmRzd2l0aCgiJmZsNik7IildCiAgICBpZiBs
+            ZWZ0b3ZlcjY6CiAgICAgICAgc3lzLmV4aXQoZiJGQUlMIGxlZnRvdmVyIDItYXJnIHVkcF92Nl9z
+            ZW5kX3NrYjoge2xlZnRvdmVyNn0iKQoKICAgIHByaW50KCJVRFBfU0VHTUVOVCA0LjE0IGJhY2tw
+            b3J0IGNvbXBsZXRlIikKCgppZiBfX25hbWVfXyA9PSAiX19tYWluX18iOgogICAgbWFpbigpCg==
           """
-          from __future__ import annotations
-          
-          import re
-          import sys
-          from pathlib import Path
-          
-          ROOT = Path(sys.argv[1] if len(sys.argv) > 1 else ".").resolve()
-          
-          
-          def read(rel: str) -> str:
-              p = ROOT / rel
-              if not p.is_file():
-                  sys.exit(f"FAIL missing {rel}")
-              return p.read_text(encoding="utf-8", errors="surrogateescape")
-          
-          
-          def write(rel: str, text: str) -> None:
-              (ROOT / rel).write_text(text, encoding="utf-8", errors="surrogateescape")
-          
-          
-          def sub(rel: str, pattern: str, repl: str, *, already: str, flags: int = 0) -> None:
-              text = read(rel)
-              if already in text:
-                  print(f"skip {rel}: already applied ({already[:60]})")
-                  return
-              new, n = re.subn(pattern, repl, text, count=1, flags=flags)
-              if n != 1:
-                  sys.exit(f"FAIL {rel}: expected 1 match, got {n} for {pattern[:120]!r}")
-              write(rel, new)
-              print(f"ok   {rel}")
-          
-          
-          GSO_IPV4 = r'''	if (cork->gso_size) {
-          		const int hlen = skb_network_header_len(skb) +
-          				 sizeof(struct udphdr);
-          
-          		if (hlen + min(datalen, (int)cork->gso_size) > cork->fragsize) {
-          			kfree_skb(skb);
-          			return -EMSGSIZE;
-          		}
-          		if (skb->len > cork->gso_size * UDP_MAX_SEGMENTS) {
-          			kfree_skb(skb);
-          			return -EINVAL;
-          		}
-          		if (sk->sk_no_check_tx || is_udplite || dst_xfrm(skb_dst(skb))) {
-          			kfree_skb(skb);
-          			return -EIO;
-          		}
-          		if (datalen > cork->gso_size) {
-          			skb_shinfo(skb)->gso_size = cork->gso_size;
-          			skb_shinfo(skb)->gso_type = SKB_GSO_UDP_L4;
-          			skb_shinfo(skb)->gso_segs = DIV_ROUND_UP(datalen,
-          								 cork->gso_size);
-          		}
-          		if (skb->ip_summed == CHECKSUM_PARTIAL)
-          			goto csum_partial;
-          		goto send;
-          	}
-          
-          '''
-          
-          GSO_IPV6 = r'''	if (cork->gso_size) {
-          		const int hlen = skb_network_header_len(skb) +
-          				 sizeof(struct udphdr);
-          
-          		if (hlen + min(datalen, (int)cork->gso_size) > cork->fragsize) {
-          			kfree_skb(skb);
-          			return -EMSGSIZE;
-          		}
-          		if (skb->len > cork->gso_size * UDP_MAX_SEGMENTS) {
-          			kfree_skb(skb);
-          			return -EINVAL;
-          		}
-          		if (udp_sk(sk)->no_check6_tx || is_udplite ||
-          		    dst_xfrm(skb_dst(skb))) {
-          			kfree_skb(skb);
-          			return -EIO;
-          		}
-          		if (datalen > cork->gso_size) {
-          			skb_shinfo(skb)->gso_size = cork->gso_size;
-          			skb_shinfo(skb)->gso_type = SKB_GSO_UDP_L4;
-          			skb_shinfo(skb)->gso_segs = DIV_ROUND_UP(datalen,
-          								 cork->gso_size);
-          		}
-          		if (skb->ip_summed == CHECKSUM_PARTIAL)
-          			goto csum_partial;
-          		goto send;
-          	}
-          
-          '''
-          
-          CMSG = r'''static int __udp_cmsg_send(struct cmsghdr *cmsg, u16 *gso_size)
-          {
-          	switch (cmsg->cmsg_type) {
-          	case UDP_SEGMENT:
-          		if (cmsg->cmsg_len != CMSG_LEN(sizeof(__u16)))
-          			return -EINVAL;
-          		*gso_size = *(__u16 *)CMSG_DATA(cmsg);
-          		return 0;
-          	default:
-          		return -EINVAL;
-          	}
-          }
-          
-          int udp_cmsg_send(struct sock *sk, struct msghdr *msg, u16 *gso_size)
-          {
-          	struct cmsghdr *cmsg;
-          	bool need_ip = false;
-          	int err;
-          
-          	for_each_cmsghdr(cmsg, msg) {
-          		if (!CMSG_OK(msg, cmsg))
-          			return -EINVAL;
-          
-          		if (cmsg->cmsg_level != SOL_UDP) {
-          			need_ip = true;
-          			continue;
-          		}
-          
-          		err = __udp_cmsg_send(cmsg, gso_size);
-          		if (err)
-          			return err;
-          	}
-          
-          	return need_ip;
-          }
-          EXPORT_SYMBOL_GPL(udp_cmsg_send);
-          
-          '''
-          
-          
-          def main() -> None:
-              sub(
-                  "include/uapi/linux/udp.h",
-                  r"(#define UDP_NO_CHECK6_RX\s+102[^\n]*\n)",
-                  r"\1#define UDP_SEGMENT	103	/* Set GSO segmentation size */\n",
-                  already="#define UDP_SEGMENT",
-              )
-              sub(
-                  "include/linux/udp.h",
-                  r"(__u16\s+len;\s*/\*[^\n]*pending frames[^\n]*\*/\n)",
-                  r"\1	__u16		 gso_size;	/* UDP GSO segment size (UDP_SEGMENT) */\n",
-                  already="gso_size;",
-              )
-              sub(
-                  "include/net/inet_sock.h",
-                  r"(char\s+priority;\n)(\};\n\nstruct inet_cork_full)",
-                  r"\1	__u16			gso_size;\n\2",
-                  already="gso_size;",
-              )
-              sub(
-                  "include/net/ip.h",
-                  r"(char\s+priority;\n)(\};\n\n#define IPCB\(skb\))",
-                  r"\1	__u16			gso_size;\n\2",
-                  already="gso_size;",
-              )
-              sub(
-                  "include/net/ipv6.h",
-                  r"(__s8\s+dontfrag;\n)(\tstruct ipv6_txoptions \*opt;)",
-                  r"\1	__u16 gso_size;\n\2",
-                  already="gso_size;",
-              )
-              sub(
-                  "include/net/udp.h",
-                  r"(unsigned int mss, __sum16 check\);\n)",
-                  r"\1\n#define UDP_MAX_SEGMENTS	(1 << 6U)\n"
-                  r"int udp_cmsg_send(struct sock *sk, struct msghdr *msg, u16 *gso_size);\n",
-                  already="udp_cmsg_send(",
-              )
-              sub(
-                  "include/linux/netdev_features.h",
-                  r"(NETIF_F_GSO_UDP_BIT,\s*/\* \.\.\. UFO, deprecated except tuntap \*/\n)"
-                  r"(\s*/\*\*/NETIF_F_GSO_LAST =\s*/\* last bit, see GSO_MASK \*/\n)"
-                  r"(\s*NETIF_F_GSO_UDP_BIT,)",
-                  r"\1	NETIF_F_GSO_UDP_L4_BIT,		/* ... UDP payload GSO (not UFO) */\n"
-                  r"\2		NETIF_F_GSO_UDP_L4_BIT,",
-                  already="NETIF_F_GSO_UDP_L4_BIT",
-              )
-              sub(
-                  "include/linux/netdev_features.h",
-                  r"(#define NETIF_F_GSO_UDP\s+__NETIF_F\(GSO_UDP\)\n)",
-                  r"\1#define NETIF_F_GSO_UDP_L4	__NETIF_F(GSO_UDP_L4)\n",
-                  already="#define NETIF_F_GSO_UDP_L4",
-              )
-              sub(
-                  "include/linux/netdev_features.h",
-                  r"(#define NETIF_F_GSO_SOFTWARE\s+\(NETIF_F_ALL_TSO \| \\\n\s+NETIF_F_GSO_SCTP\))",
-                  r"\1				 NETIF_F_GSO_SCTP | NETIF_F_GSO_UDP_L4)",
-                  already="NETIF_F_GSO_UDP_L4)",
-              )
-              sub(
-                  "include/linux/netdevice.h",
-                  r"(BUILD_BUG_ON\(SKB_GSO_UDP != \(NETIF_F_GSO_UDP >> NETIF_F_GSO_SHIFT\)\);\n)",
-                  r"\1	BUILD_BUG_ON(SKB_GSO_UDP_L4 != (NETIF_F_GSO_UDP_L4 >> NETIF_F_GSO_SHIFT));\n",
-                  already="SKB_GSO_UDP_L4 != (NETIF_F_GSO_UDP_L4",
-              )
-              sub(
-                  "net/ipv4/ip_output.c",
-                  r"(cork->tx_flags = ipc->tx_flags;\n)(\n\treturn 0;)",
-                  r"\1	cork->gso_size = ipc->gso_size;\n\2",
-                  already="cork->gso_size = ipc->gso_size",
-              )
-              sub(
-                  "net/ipv6/ip6_output.c",
-                  r"(cork->base.length = 0;\n)(\n\treturn 0;)",
-                  r"\1	cork->base.gso_size = ipc6->gso_size;\n\2",
-                  already="cork->base.gso_size = ipc6->gso_size",
-              )
-          
-              # ipv4 udp_send_skb
-              sub(
-                  "net/ipv4/udp.c",
-                  r"static int udp_send_skb\(struct sk_buff \*skb, struct flowi4 \*fl4\)\n",
-                  "static int udp_send_skb(struct sk_buff *skb, struct flowi4 *fl4,\n"
-                  "			struct inet_cork *cork)\n",
-                  already="struct inet_cork *cork)",
-              )
-              sub(
-                  "net/ipv4/udp.c",
-                  r"(int len = skb->len - offset;\n)(\t__wsum csum = 0;)",
-                  r"\1	int datalen = len - sizeof(*uh);\n\2",
-                  already="int datalen = len - sizeof(*uh);",
-              )
-              sub(
-                  "net/ipv4/udp.c",
-                  r"(uh->len = htons\(len\);\n\tuh->check = 0;\n\n)(\tif \(is_udplite\))",
-                  r"\1" + GSO_IPV4 + r"\2",
-                  already="if (cork->gso_size)",
-              )
-              sub(
-                  "net/ipv4/udp.c",
-                  r"(else if \(skb->ip_summed == CHECKSUM_PARTIAL\) \{ /\* UDP hardware csum \*/\n\n)"
-                  r"(\t\tudp4_hwcsum\(skb, fl4->saddr, fl4->daddr\);)",
-                  r"\1csum_partial:\n\n\2",
-                  already="\ncsum_partial:\n",
-              )
-              sub(
-                  "net/ipv4/udp.c",
-                  r"err = udp_send_skb\(skb, fl4\);",
-                  "err = udp_send_skb(skb, fl4, &inet->cork.base);",
-                  already="udp_send_skb(skb, fl4, &inet->cork.base)",
-              )
-              sub(
-                  "net/ipv4/udp.c",
-                  r"(EXPORT_SYMBOL\(udp_push_pending_frames\);\n\n)(int udp_sendmsg\()",
-                  r"\1" + CMSG + r"\2",
-                  already="int udp_cmsg_send(struct sock *sk, struct msghdr *msg, u16 *gso_size)",
-              )
-              sub(
-                  "net/ipv4/udp.c",
-                  r"(ipc.tos = -1;\n)",
-                  r"\1	ipc.gso_size = up->gso_size;\n",
-                  already="ipc.gso_size = up->gso_size",
-              )
-              sub(
-                  "net/ipv4/udp.c",
-                  r"err = ip_cmsg_send\(sk, msg, &ipc, sk->sk_family == AF_INET6\);\n"
-                  r"\t\tif \(unlikely\(err\)\) \{",
-                  "err = udp_cmsg_send(sk, msg, &ipc.gso_size);\n"
-                  "		if (err > 0)\n"
-                  "			err = ip_cmsg_send(sk, msg, &ipc,\n"
-                  "					   sk->sk_family == AF_INET6);\n"
-                  "		if (unlikely(err < 0)) {",
-                  already="udp_cmsg_send(sk, msg, &ipc.gso_size)",
-              )
-              sub(
-                  "net/ipv4/udp.c",
-                  r"(if \(!corkreq\) \{\n)"
-                  r"(\t\tskb = ip_make_skb\(sk, fl4, getfrag, msg, ulen,\n"
-                  r"\t\t\t\t  sizeof\(struct udphdr\), &ipc, &rt,\n"
-                  r"\t\t\t\t  msg->msg_flags\);\n"
-                  r"\t\terr = PTR_ERR\(skb\);\n"
-                  r"\t\tif \(!IS_ERR_OR_NULL\(skb\)\)\n"
-                  r"\t\t\terr = udp_send_skb\(skb, fl4\);)",
-                  r"\1		struct inet_cork cork;\n"
-                  r"\n"
-                  r"		skb = ip_make_skb(sk, fl4, getfrag, msg, ulen,\n"
-                  r"				  sizeof(struct udphdr), &ipc, &rt,\n"
-                  r"				  msg->msg_flags);\n"
-                  r"		err = PTR_ERR(skb);\n"
-                  r"		if (!IS_ERR_OR_NULL(skb)) {\n"
-                  r"			cork.gso_size = ipc.gso_size;\n"
-                  r"			cork.fragsize = ip_sk_use_pmtu(sk) ?\n"
-                  r"				dst_mtu(skb_dst(skb)) :\n"
-                  r"				skb_dst(skb)->dev->mtu;\n"
-                  r"			err = udp_send_skb(skb, fl4, &cork);\n"
-                  r"		}",
-                  already="cork.gso_size = ipc.gso_size",
-              )
-              sub(
-                  "net/ipv4/udp.c",
-                  r"(case UDP_NO_CHECK6_RX:\n\t\tup->no_check6_rx = valbool;\n\t\tbreak;\n\n)",
-                  r"\1	case UDP_SEGMENT:\n"
-                  r"		if (val < 0 || val > USHRT_MAX)\n"
-                  r"			return -EINVAL;\n"
-                  r"		up->gso_size = val;\n"
-                  r"		break;\n\n",
-                  already="up->gso_size = val",
-              )
-              sub(
-                  "net/ipv4/udp.c",
-                  r"(case UDP_NO_CHECK6_RX:\n\t\tval = up->no_check6_rx;\n\t\tbreak;\n\n)",
-                  r"\1	case UDP_SEGMENT:\n"
-                  r"		val = up->gso_size;\n"
-                  r"		break;\n\n",
-                  already="val = up->gso_size",
-              )
-          
-              # ipv6
-              sub(
-                  "net/ipv6/udp.c",
-                  r"static int udp_v6_send_skb\(struct sk_buff \*skb, struct flowi6 \*fl6\)\n",
-                  "static int udp_v6_send_skb(struct sk_buff *skb, struct flowi6 *fl6,\n"
-                  "			   struct inet_cork *cork)\n",
-                  already="struct inet_cork *cork)",
-              )
-              sub(
-                  "net/ipv6/udp.c",
-                  r"(int offset = skb_transport_offset\(skb\);\n"
-                  r"\tint len = skb->len - offset;\n)",
-                  r"\1	int datalen = len - sizeof(*uh);\n",
-                  already="int datalen = len - sizeof(*uh);",
-              )
-              sub(
-                  "net/ipv6/udp.c",
-                  r"(uh->len = htons\(len\);\n\tuh->check = 0;\n\n)(\tif \(is_udplite\)\n\t\tcsum = udplite_csum\(skb\);)",
-                  r"\1" + GSO_IPV6 + r"\2",
-                  already="if (cork->gso_size)",
-              )
-              sub(
-                  "net/ipv6/udp.c",
-                  r"(else if \(skb->ip_summed == CHECKSUM_PARTIAL\) \{ /\* UDP hardware csum \*/\n)"
-                  r"(\t\tudp6_hwcsum_outgoing\(sk, skb, &fl6->saddr, &fl6->daddr, len\);)",
-                  r"\1csum_partial:\n\2",
-                  already="\ncsum_partial:\n",
-              )
-              sub(
-                  "net/ipv6/udp.c",
-                  r"err = udp_v6_send_skb\(skb, &fl6\);",
-                  "err = udp_v6_send_skb(skb, &fl6, &inet_sk(sk)->cork.base);",
-                  already="udp_v6_send_skb(skb, &fl6, &inet_sk(sk)->cork.base)",
-              )
-              sub(
-                  "net/ipv6/udp.c",
-                  r"(ipc6.dontfrag = -1;\n)",
-                  r"\1	ipc6.gso_size = up->gso_size;\n",
-                  already="ipc6.gso_size = up->gso_size",
-              )
-              sub(
-                  "net/ipv6/udp.c",
-                  r"err = ip6_datagram_send_ctl\(sock_net\(sk\), sk, msg, &fl6, &ipc6, &sockc\);",
-                  "err = udp_cmsg_send(sk, msg, &ipc6.gso_size);\n"
-                  "		if (err > 0)\n"
-                  "			err = ip6_datagram_send_ctl(sock_net(sk), sk, msg, &fl6,\n"
-                  "						    &ipc6, &sockc);",
-                  already="udp_cmsg_send(sk, msg, &ipc6.gso_size)",
-              )
-              sub(
-                  "net/ipv6/udp.c",
-                  r"(if \(!corkreq\) \{\n\t\tstruct sk_buff \*skb;\n\n)"
-                  r"(\t\tskb = ip6_make_skb\(sk, getfrag, msg, ulen,\n"
-                  r"\t\t\t\t   sizeof\(struct udphdr\), &ipc6,\n"
-                  r"\t\t\t\t   &fl6, \(struct rt6_info \*\)dst,\n"
-                  r"\t\t\t\t   msg->msg_flags, &sockc\);\n"
-                  r"\t\terr = PTR_ERR\(skb\);\n"
-                  r"\t\tif \(!IS_ERR_OR_NULL\(skb\)\)\n"
-                  r"\t\t\terr = udp_v6_send_skb\(skb, &fl6\);)",
-                  r"\1		struct inet_cork cork;\n"
-                  r"\n"
-                  r"		skb = ip6_make_skb(sk, getfrag, msg, ulen,\n"
-                  r"				   sizeof(struct udphdr), &ipc6,\n"
-                  r"				   &fl6, (struct rt6_info *)dst,\n"
-                  r"				   msg->msg_flags, &sockc);\n"
-                  r"		err = PTR_ERR(skb);\n"
-                  r"		if (!IS_ERR_OR_NULL(skb)) {\n"
-                  r"			cork.gso_size = ipc6.gso_size;\n"
-                  r"			cork.fragsize = dst_mtu(skb_dst(skb));\n"
-                  r"			err = udp_v6_send_skb(skb, &fl6, &cork);\n"
-                  r"		}",
-                  already="cork.gso_size = ipc6.gso_size",
-              )
-          
-              sub(
-                  "net/ipv4/udp_offload.c",
-                  r"(if \(!can_checksum_protocol\(features, htons\(ETH_P_IP\)\)\)\n)"
-                  r"\t\treturn ERR_PTR\(-EIO\);",
-                  r"\1		features &= ~(NETIF_F_CSUM_MASK | NETIF_F_GSO_MASK);",
-                  already="features &= ~(NETIF_F_CSUM_MASK | NETIF_F_GSO_MASK)",
-              )
-              sub(
-                  "net/ipv6/udp_offload.c",
-                  r"(if \(!can_checksum_protocol\(features, htons\(ETH_P_IPV6\)\)\)\n)"
-                  r"\t\treturn ERR_PTR\(-EIO\);",
-                  r"\1		features &= ~(NETIF_F_CSUM_MASK | NETIF_F_GSO_MASK);",
-                  already="features &= ~(NETIF_F_CSUM_MASK | NETIF_F_GSO_MASK)",
-              )
-          
-              leftover4 = re.findall(r"udp_send_skb\([^;]*fl4\);", read("net/ipv4/udp.c"))
-              leftover4 = [x for x in leftover4 if ", &" not in x and ", cork" not in x]
-              if leftover4:
-                  sys.exit(f"FAIL leftover 2-arg udp_send_skb: {leftover4}")
-              leftover6 = re.findall(r"udp_v6_send_skb\([^;]*&fl6\);", read("net/ipv6/udp.c"))
-              leftover6 = [x for x in leftover6 if ", &" not in x.split("&fl6")[-1]]
-              leftover6 = [x for x in leftover6 if x.strip().endswith("&fl6);")]
-              if leftover6:
-                  sys.exit(f"FAIL leftover 2-arg udp_v6_send_skb: {leftover6}")
-          
-              print("UDP_SEGMENT 4.14 backport complete")
-          
-          
-          if __name__ == "__main__":
-              main()
+          pathlib.Path("/tmp/apply_udp_segment.py").write_bytes(
+              base64.b64decode(re.sub(r"\s+", "", raw))
+          )
           PY
+          python3 /tmp/apply_udp_segment.py "$GITHUB_WORKSPACE"
 
-          # 2) VPNHide Next in-tree inject (upstream-4.14 profile)
+          # 2) VPNHide Next in-tree inject (upstream-4.14)
           git clone --depth 1 https://github.com/soranerai/vpnhide_next_backend.git /tmp/vpnhide_next_backend
           sed -i 's/#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 18, 0)/#if defined(UDP_SEGMENT)/' \
             /tmp/vpnhide_next_backend/kpatch/security/vpnhide/hook_socket.c
@@ -637,9 +467,10 @@ jobs:
           grep -q '^CONFIG_VPNHIDE=y' arch/arm64/configs/exynos9820_defconfig \
             || echo 'CONFIG_VPNHIDE=y' >> arch/arm64/configs/exynos9820_defconfig
 
-          grep -q "^#define UDP_SEGMENT" include/uapi/linux/udp.h
-          grep -q "CONFIG_VPNHIDE" security/Makefile
+          grep -q '^#define UDP_SEGMENT' include/uapi/linux/udp.h
+          grep -q 'CONFIG_VPNHIDE' security/Makefile
           test -f security/vpnhide/core.c
+          echo "VPNHide + UDP_SEGMENT ready"
 
     
       - name: 🧩 Patch Kernel of NoMount
