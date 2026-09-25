@@ -461,6 +461,26 @@ jobs:
 
           # 2) VPNHide Next in-tree inject (upstream-4.14)
           git clone --depth 1 https://github.com/soranerai/vpnhide_next_backend.git /tmp/vpnhide_next_backend
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("/tmp/vpnhide_next_backend/kpatch/scripts/inject_legacy.py")
+          t = p.read_text()
+          old = 'if ipv6_route_show == "ipv6_route_native_seq_show":'
+          if old not in t:
+              raise SystemExit("inject_legacy.py: ipv6 if not found")
+          t = t.replace(
+              old,
+              'if ipv6_route_show == "ipv6_route_native_seq_show" or "fib6_dst" in common.read("net/ipv6/ip6_fib.c"):',
+              1,
+          )
+          t = t.replace(
+              'ipv6_anchor = "\\tdev = rt->fib6_nh.nh_dev;"',
+              'ipv6_anchor = "\\tseq_printf(seq, \\" %08x"',
+              1,
+          )
+          p.write_text(t)
+          print("patched inject_legacy.py for Samsung fib6_info")
+          PY
           sed -i 's/#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 18, 0)/#if defined(UDP_SEGMENT)/' \
             /tmp/vpnhide_next_backend/kpatch/security/vpnhide/hook_socket.c
           bash /tmp/vpnhide_next_backend/kpatch/scripts/apply.sh "$GITHUB_WORKSPACE/device_kernel" upstream-4.14
