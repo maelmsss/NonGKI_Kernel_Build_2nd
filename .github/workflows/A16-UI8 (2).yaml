@@ -203,7 +203,7 @@ jobs:
       - name: Apply VPNHide kpatch + UDP_SEGMENT backport
         run: |
           set -euo pipefail
-          cd "$GITHUB_WORKSPACE"
+          cd "$GITHUB_WORKSPACE/device_kernel"
 
           # 1) UDP_SEGMENT / UDP GSO sockopt backport (Linux 4.14)
           python3 - <<'PY'
@@ -457,13 +457,13 @@ jobs:
               base64.b64decode(re.sub(r"\s+", "", raw))
           )
           PY
-          python3 /tmp/apply_udp_segment.py "$GITHUB_WORKSPACE"
+          python3 /tmp/apply_udp_segment.py "$GITHUB_WORKSPACE/device_kernel"
 
           # 2) VPNHide Next in-tree inject (upstream-4.14)
           git clone --depth 1 https://github.com/soranerai/vpnhide_next_backend.git /tmp/vpnhide_next_backend
           sed -i 's/#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 18, 0)/#if defined(UDP_SEGMENT)/' \
             /tmp/vpnhide_next_backend/kpatch/security/vpnhide/hook_socket.c
-          bash /tmp/vpnhide_next_backend/kpatch/scripts/apply.sh "$GITHUB_WORKSPACE" upstream-4.14
+          bash /tmp/vpnhide_next_backend/kpatch/scripts/apply.sh "$GITHUB_WORKSPACE/device_kernel" upstream-4.14
           grep -q '^CONFIG_VPNHIDE=y' arch/arm64/configs/exynos9820_defconfig \
             || echo 'CONFIG_VPNHIDE=y' >> arch/arm64/configs/exynos9820_defconfig
 
