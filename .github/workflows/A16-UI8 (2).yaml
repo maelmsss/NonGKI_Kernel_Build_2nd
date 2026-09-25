@@ -458,6 +458,22 @@ jobs:
           )
           PY
           python3 /tmp/apply_udp_segment.py "$GITHUB_WORKSPACE/device_kernel"
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          p = Path("include/linux/netdev_features.h")
+          t = p.read_text()
+          t2, n = re.subn(
+              r"NETIF_F_GSO_SCTP\)\s+NETIF_F_GSO_SCTP\s*\|\s*NETIF_F_GSO_UDP_L4\)",
+              "NETIF_F_GSO_SCTP | NETIF_F_GSO_UDP_L4)",
+              t,
+              count=1,
+          )
+          if n != 1:
+              raise SystemExit(f"NETIF_F_GSO_SOFTWARE fix failed n={n}")
+          p.write_text(t2)
+          print("fixed NETIF_F_GSO_SOFTWARE")
+          PY
 
           # 2) VPNHide Next in-tree inject (upstream-4.14)
           git clone --depth 1 https://github.com/soranerai/vpnhide_next_backend.git /tmp/vpnhide_next_backend
