@@ -163,23 +163,24 @@ jobs:
         shell: bash
         run: |
           cd $GITHUB_WORKSPACE/device_kernel
-          
+    
           BASE_URL="https://raw.githubusercontent.com/fatalcoder524/kernel_patches_additional/main/other_opt"
-          
+    
           PATCHES=(
             "f2fs_enlarge_min_fsync_blocks.patch"
           )
-          
+    
           echo "[+] Downloading and applying extreme optimization patches..."
-          
+    
           for PATCH_FILE in "${PATCHES[@]}"; do
             echo "------------------------------------------------"
             echo "[*] Processing: $PATCH_FILE"
-            
-          wget -qO "$PATCH_FILE" "$BASE_URL/$PATCH_FILE"
+      
+            wget -qO "$PATCH_FILE" "$BASE_URL/$PATCH_FILE"
             patch -p1 --forward --dry-run < "$PATCH_FILE"
             patch -p1 --forward < "$PATCH_FILE"            
-          
+          done
+    
           echo "------------------------------------------------"
           echo "[+] All optimization patches processed successfully!"
 
