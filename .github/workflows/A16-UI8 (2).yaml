@@ -169,13 +169,9 @@ jobs:
           
           # Uygulanacak yamaların listesi
           PATCHES=(
-            "silence_irq_cpu_logspam.patch"
             "reduce_pci_pme_wakeups.patch"
             "increase_sk_mem_packets.patch"
-            "increase_ext4_default_commit_age.patch"
             "f2fs_enlarge_min_fsync_blocks.patch"
-            "disable_cache_hot_buddy.patch"
-            "adjust_cpu_scan_order.patch"
           )
           
           echo "[+] Downloading and applying extreme optimization patches..."
@@ -542,11 +538,11 @@ jobs:
           cd $GITHUB_WORKSPACE/device_kernel
           DEFCONFIG_FILE="arch/arm64/configs/${{ env.DEFCONFIG_NAME }}"
 
-          # 1. BORE (Kconfig default y; defconfig'e açık yaz)
+          # 1. BORE
           sed -i '/CONFIG_SCHED_BORE/d' "$DEFCONFIG_FILE"
           echo "CONFIG_SCHED_BORE=y" >> "$DEFCONFIG_FILE"
 
-          # 2. Ağır debug / factory / log (CORESIGHT ve SCHED_DEBUG'a dokunma)
+          # 2. Ağır debug / factory / log
           sed -i \
             -e 's/^CONFIG_SLUB_DEBUG=y$/# CONFIG_SLUB_DEBUG is not set/' \
             -e 's/^CONFIG_SEC_NAD=y$/# CONFIG_SEC_NAD is not set/' \
@@ -559,8 +555,6 @@ jobs:
             -e 's/^CONFIG_MMC_DW_DEBUG=y$/# CONFIG_MMC_DW_DEBUG is not set/' \
             "$DEFCONFIG_FILE"
 
-          # 3. Uname spoof kapalı (KSU fragment bu adımdan SONRA merge ediliyorsa
-          #    aynı satırı fragment'te de kapat, yoksa geri açılır)
           sed -i '/CONFIG_KSU_SUSFS_SPOOF_UNAME/d' "$DEFCONFIG_FILE"
           echo "# CONFIG_KSU_SUSFS_SPOOF_UNAME is not set" >> "$DEFCONFIG_FILE"
             
