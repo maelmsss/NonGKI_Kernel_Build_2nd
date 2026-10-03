@@ -89,8 +89,7 @@ jobs:
     name: Build ${{ matrix.name }}
     runs-on: ubuntu-latest
     strategy:
-      fail-fast: false
-      max-parallel: 2
+      fail-fast: true
       matrix:
         include:
           # S10 Series (Exynos 9820)
