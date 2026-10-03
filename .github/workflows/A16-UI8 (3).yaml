@@ -1,0 +1,765 @@
+name: Build Samsung S10 & Note 10 Series (OneUI A15)
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+env:
+  # Device env
+  CUSTOM_CMDS : "CLANG_TRIPLE=aarch64-linux-gnu-"
+  EXTRA_CMDS : "LLVM=1 LLVM_IAS=1"
+
+  KERNEL_SOURCE : "https://github.com/maelmsss/exynos982x_kernel.git"
+  KERNEL_BRANCH : "main"
+
+  CLANG_SOURCE : "https://gitlab.com/kei-space/clang/r547379.git"
+  CLANG_BRANCH : "master"
+
+  GCC_GNU : false
+  GCC_64_SOURCE : ""
+  GCC_64_BRANCH : ""
+  GCC_32_SOURCE : ""
+  GCC_32_BRANCH : ""
+
+  DEFCONFIG_SOURCE: ""
+  DEFCONFIG_NAME : "exynos9820_defconfig"
+  DEFCONFIG_ORIGIN_IMAGE: ""
+  DEFCONFIG_FROM_BOOT: false
+
+  KERNELSU_SOURCE : ""
+  KERNELSU_BRANCH : ""
+
+  KERNELSU_AUTO_GET : "true"
+  KERNELSU_AUTO_FORK : "resukisu"
+
+  SUSFS_ENABLE : true
+  SUSFS_FIXED : true
+  
+  AK3_SOURCE : "https://github.com/osm0sis/AnyKernel3.git"
+  AK3_BRANCH : "master"
+
+  BOOT_SOURCE : ""
+
+  NEED_DTBO : false
+  NEED_SAFE_DTBO : false
+
+  ROM_TEXT : "oneui_a15"
+
+  # Other env
+  PYTHON_VERSION: "3"
+
+  PACK_METHOD: "Anykernel3"
+  PACK_KMODULES: "false"
+
+  KERNELSU_METHOD: "shell"
+
+  PATCHES_SOURCE: "JackA1ltman/NonGKI_Kernel_Patches"
+  PATCHES_BRANCH: "samsung_kernel"
+
+  SUSFS_FOLDER_FIXED: "note10_plus_exyons9850"
+  SUSFS_PATCH_FIXED: "susfs_fixed"
+
+  REKERNEL_ENABLE: "false"
+  DROIDSPACES_ENABLE: "false"
+  NOMOUNT_ENABLE: "false"
+
+  HOOK_METHOD: "syscall"
+
+  KERNEL_PATCH: "false"
+
+  KPM_ENABLE: "false"
+  KPM_INLINE: "false"
+  KPM_KPATCH_NEXT: "false"
+  KPM_PATCH_SOURCE: "https://raw.githubusercontent.com/ShirkNeko/SukiSU_patch/refs/heads/main/kpm/patch_linux"
+
+  BASEBAND_GUARD_ENABLE: "true"
+  BASEBAND_GUARD_BOOT: "false"
+
+  GENERATE_DTB: "false"
+  GENERATE_CHIP: "qcom"
+
+  BUILD_DEBUGGER: "false"
+  SKIP_PATCH: "false"
+
+  BUILD_OTHER_CONFIG: "true"
+  
+  FREE_MORE_SPACE: "false"
+
+jobs:
+  build-kernel:
+    name: Build ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # S10 Series (Exynos 9820)
+          - model: beyond0lte
+            name: Galaxy S10e
+            board: SRPRI28A016KU
+            soc: exynos9820
+            dtbo_cfg: beyond0lte
+          - model: beyond1lte
+            name: Galaxy S10
+            board: SRPRI28B016KU
+            soc: exynos9820
+            dtbo_cfg: beyond1lte
+          - model: beyond2lte
+            name: Galaxy S10+
+            board: SRPRI17C016KU
+            soc: exynos9820
+            dtbo_cfg: beyond2lte
+          - model: beyondx
+            name: Galaxy S10 5G
+            board: SRPSC04B014KU
+            soc: exynos9820
+            dtbo_cfg: beyondx
+          - model: beyondxks
+            name: Galaxy S10 5G Korea
+            board: SRPSC04B014KU 
+            soc: exynos9820
+            dtbo_cfg: beyondx
+            
+          # Note 10 Series (Exynos 9825)
+          - model: d1
+            name: Galaxy Note 10
+            board: SRPSD26B009KU
+            soc: exynos9825
+            dtbo_cfg: d1
+          - model: d1xks
+            name: Galaxy Note 10 Korea
+            board: SRPSD23A002KU
+            soc: exynos9825
+            dtbo_cfg: d1xks
+          - model: d2s
+            name: Galaxy Note 10+
+            board: SRPSC14B009KU
+            soc: exynos9825
+            dtbo_cfg: d2s
+          - model: d2x
+            name: Galaxy Note 10+ 5G
+            board: SRPSC14C009KU
+            soc: exynos9825
+            dtbo_cfg: d2x
+          - model: d2xks
+            name: Galaxy Note 10+ 5G Korea
+            board: SRPSD23C002KU
+            soc: exynos9825
+            dtbo_cfg: d2x
+
+    env:
+      DEVICE_NAME: ${{ matrix.name }}
+      DEVICE_CODENAME: ${{ matrix.model }}
+      MERGE_CONFIG_FILES: "${{ matrix.model }}.config"
+      CCACHE_COMPILERCHECK: "%compiler% -dumpmachine; %compiler% -dumpversion"
+      CCACHE_NOHASHDIR: "true"
+      CCACHE_HARDLINK: "true"
+      KBUILD_BUILD_TIMESTAMP: "Thu Mar 2 09:32:04 KST 2023"
+      KBUILD_BUILD_USER: "builder"
+      KBUILD_BUILD_HOST: "buildhost"
+
+    steps:
+      - name: ⏰ Checkout repository
+        uses: actions/checkout@v6
+
+      - name: 🛡️ Backup Patches Directory
+        shell: bash
+        run: |
+          echo "[*] Backing up Patches directory to /tmp/Patches_Backup..."
+          cp -r $GITHUB_WORKSPACE/Patches /tmp/Patches_Backup
+          echo "[+] Backup complete. Contents of /tmp/Patches_Backup:"
+          ls -la /tmp/Patches_Backup
+      # ========================================
+
+      - name: 🔍 List Patches directory
+        shell: bash
+        run: |
+          ls -la $GITHUB_WORKSPACE/Patches/ || echo "[-] Patches not found in Workspace (already backed up)"
+          echo "---"
+          find /tmp/Patches_Backup -maxdepth 2 -type f
+
+      - name: ⌛️ Compilation environment preparation
+        uses: ./.github/workflows/build-env
+
+      - name: ⚙️ Get necessary tools
+        uses: ./.github/workflows/build-ready
+
+      - name: ⚙️ Custom Scheduler Optimizations (Hardcoded & Locked)
+        shell: bash
+        run: |
+            cd $GITHUB_WORKSPACE/device_kernel
+
+            echo "[*] Processing Kconfig settings..."
+            find arch/arm64/configs -type f -name "*defconfig" -exec sh -c '
+                
+                # (Network Scheduler)
+                echo "CONFIG_NET_SCHED=y" >> "{}"
+                echo "CONFIG_NET_SCH_FQ_CODEL=y" >> "{}"
+                echo "CONFIG_DEFAULT_FQ_CODEL=y" >> "{}"
+                echo "CONFIG_NET_SCH_DEFAULT=y" >> "{}"
+                sed -i "/CONFIG_DEFAULT_NET_SCH/d" "{}"
+                echo "CONFIG_DEFAULT_NET_SCH=\"fq_codel\"" >> "{}"
+
+                # (Congestion Control)
+                echo "CONFIG_TCP_CONG_ADVANCED=y" >> "{}"
+                echo "CONFIG_TCP_CONG_CUBIC=y" >> "{}"
+                echo "CONFIG_DEFAULT_CUBIC=y" >> "{}"
+                sed -i "/CONFIG_DEFAULT_TCP_CONG/d" "{}"
+                echo "CONFIG_DEFAULT_TCP_CONG=\"cubic\"" >> "{}"
+            ' \;
+
+            echo "[*] Hardcoding fq_codel into source..."
+            # 1. Replace pfifo_fast with fq_codel in source code
+            sed -i 's/"pfifo_fast"/"fq_codel"/g' net/sched/sch_generic.c
+
+            echo "[+] Optimizations locked into kernel successfully!"
+
+      - name: 🛠️ Apply Hotplug Spam Fix
+        shell: bash
+        run: |
+          cd $GITHUB_WORKSPACE/device_kernel
+          
+          echo "[+] Creating patch file for cpuhotplug..."
+          cat << 'EOF' > fix_hotplug_spam.patch
+          diff --git a/kernel/irq/cpuhotplug.c b/kernel/irq/cpuhotplug.c
+          --- a/kernel/irq/cpuhotplug.c
+          +++ b/kernel/irq/cpuhotplug.c
+          @@ -131,7 +131,7 @@ static bool migrate_one_irq(struct irq_desc *desc)
+           	 */
+           	err = irq_do_set_affinity(d, affinity, false);
+           	if (err) {
+          -		pr_warn_ratelimited("IRQ%u: set affinity failed(%d).\n",
+          +		pr_debug_ratelimited("IRQ%u: set affinity failed(%d).\n",
+           				    d->irq, err);
+           		brokeaff = false;
+           	}
+          @@ -166,7 +166,7 @@ void irq_migrate_all_off_this_cpu(void)
+           		raw_spin_unlock(&desc->lock);
+           
+           		if (affinity_broken) {
+          -			pr_warn_ratelimited("IRQ %u: no longer affine to CPU%u\n",
+          +			pr_debug_ratelimited("IRQ %u: no longer affine to CPU%u\n",
+           					    irq, smp_processor_id());
+           		}
+           	}
+          EOF
+          
+          echo "[+] Applying hotplug spam patch..."
+          patch -p1 < fix_hotplug_spam.patch
+
+      - name: 🛠️ Apply Fatalcoder Optimizations
+        shell: bash
+        run: |
+          cd $GITHUB_WORKSPACE/device_kernel
+          
+          # GitHub Raw bağlantı adresi
+          BASE_URL="https://raw.githubusercontent.com/fatalcoder524/kernel_patches_additional/main/other_opt"
+          
+          # Uygulanacak yamaların listesi
+          PATCHES="f2fs_enlarge_min_fsync_blocks.patch"
+          
+          echo "[+] Downloading and applying extreme optimization patches..."
+          
+          for PATCH_FILE in $PATCHES; do
+            echo "------------------------------------------------"
+            echo "[*] Processing: $PATCH_FILE"
+            
+            # Yamayı indir
+            wget -qO "$PATCH_FILE" "$BASE_URL/$PATCH_FILE"
+            
+            # Yamayı toleransla uygula, çakışırsa sistemi çökertmeden diğerine geç
+            patch -p1 --forward < "$PATCH_FILE"
+          done
+          
+          echo "------------------------------------------------"
+          echo "[+] All optimization patches processed successfully!"
+
+      - name: 🪝 Patch Kernel of SUSFS
+        uses: ./.github/workflows/patch-susfs
+
+      - name: 🔗 Patch for no-kprobe
+        uses: ./.github/workflows/patch-no-kprobe
+
+      - name: Apply VPNHide kpatch + UDP_SEGMENT backport
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/device_kernel"
+
+          # 1) UDP_SEGMENT / UDP GSO sockopt backport (Linux 4.14)
+          python3 - <<'PY'
+          import base64, pathlib, re
+          raw = """
+            IyEvdXNyL2Jpbi9lbnYgcHl0aG9uMwoiIiJJZGVtcG90ZW50IFVEUF9TRUdNRU5UIChVRFAgR1NP
+            KSBiYWNrcG9ydCBmb3IgTGludXggNC4xNC4KCk1pcnJvcnMgdXBzdHJlYW06CiAgYmVjMWY2ZjY5
+            NzM2IHVkcDogZ2VuZXJhdGUgZ3NvIHdpdGggVURQX1NFR01FTlQKICAyZThkZTg1NzYzNDMgdWRw
+            OiBhZGQgZ3NvIHNlZ21lbnQgY21zZwpwbHVzIHRoZSBzb2Z0d2FyZSBjaGVja3N1bSBmYWxsYmFj
+            ayBzbyBUVU4gZG9lcyBub3QgcmV0dXJuIC1FSU8uCiIiIgpmcm9tIF9fZnV0dXJlX18gaW1wb3J0
+            IGFubm90YXRpb25zCgppbXBvcnQgcmUKaW1wb3J0IHN5cwpmcm9tIHBhdGhsaWIgaW1wb3J0IFBh
+            dGgKClJPT1QgPSBQYXRoKHN5cy5hcmd2WzFdIGlmIGxlbihzeXMuYXJndikgPiAxIGVsc2UgIi4i
+            KS5yZXNvbHZlKCkKCgpkZWYgcmVhZChyZWw6IHN0cikgLT4gc3RyOgogICAgcCA9IFJPT1QgLyBy
+            ZWwKICAgIGlmIG5vdCBwLmlzX2ZpbGUoKToKICAgICAgICBzeXMuZXhpdChmIkZBSUwgbWlzc2lu
+            ZyB7cmVsfSIpCiAgICByZXR1cm4gcC5yZWFkX3RleHQoZW5jb2Rpbmc9InV0Zi04IiwgZXJyb3Jz
+            PSJzdXJyb2dhdGVlc2NhcGUiKQoKCmRlZiB3cml0ZShyZWw6IHN0ciwgdGV4dDogc3RyKSAtPiBO
+            b25lOgogICAgKFJPT1QgLyByZWwpLndyaXRlX3RleHQodGV4dCwgZW5jb2Rpbmc9InV0Zi04Iiwg
+            ZXJyb3JzPSJzdXJyb2dhdGVlc2NhcGUiKQoKCmRlZiBzdWIocmVsOiBzdHIsIHBhdHRlcm46IHN0
+            ciwgcmVwbDogc3RyLCAqLCBhbHJlYWR5OiBzdHIsIGZsYWdzOiBpbnQgPSAwKSAtPiBOb25lOgog
+            ICAgdGV4dCA9IHJlYWQocmVsKQogICAgaWYgYWxyZWFkeSBpbiB0ZXh0OgogICAgICAgIHByaW50
+            KGYic2tpcCB7cmVsfTogYWxyZWFkeSBhcHBsaWVkICh7YWxyZWFkeVs6NjBdfSkiKQogICAgICAg
+            IHJldHVybgogICAgbmV3LCBuID0gcmUuc3VibihwYXR0ZXJuLCByZXBsLCB0ZXh0LCBjb3VudD0x
+            LCBmbGFncz1mbGFncykKICAgIGlmIG4gIT0gMToKICAgICAgICBzeXMuZXhpdChmIkZBSUwge3Jl
+            bH06IGV4cGVjdGVkIDEgbWF0Y2gsIGdvdCB7bn0gZm9yIHtwYXR0ZXJuWzoxMjBdIXJ9IikKICAg
+            IHdyaXRlKHJlbCwgbmV3KQogICAgcHJpbnQoZiJvayAgIHtyZWx9IikKCgpHU09fSVBWNCA9IHIn
+            JycJaWYgKGNvcmstPmdzb19zaXplKSB7CgkJY29uc3QgaW50IGhsZW4gPSBza2JfbmV0d29ya19o
+            ZWFkZXJfbGVuKHNrYikgKwoJCQkJIHNpemVvZihzdHJ1Y3QgdWRwaGRyKTsKCgkJaWYgKGhsZW4g
+            KyBtaW4oZGF0YWxlbiwgKGludCljb3JrLT5nc29fc2l6ZSkgPiBjb3JrLT5mcmFnc2l6ZSkgewoJ
+            CQlrZnJlZV9za2Ioc2tiKTsKCQkJcmV0dXJuIC1FTVNHU0laRTsKCQl9CgkJaWYgKHNrYi0+bGVu
+            ID4gY29yay0+Z3NvX3NpemUgKiBVRFBfTUFYX1NFR01FTlRTKSB7CgkJCWtmcmVlX3NrYihza2Ip
+            OwoJCQlyZXR1cm4gLUVJTlZBTDsKCQl9CgkJaWYgKHNrLT5za19ub19jaGVja190eCB8fCBpc191
+            ZHBsaXRlIHx8IGRzdF94ZnJtKHNrYl9kc3Qoc2tiKSkpIHsKCQkJa2ZyZWVfc2tiKHNrYik7CgkJ
+            CXJldHVybiAtRUlPOwoJCX0KCQlpZiAoZGF0YWxlbiA+IGNvcmstPmdzb19zaXplKSB7CgkJCXNr
+            Yl9zaGluZm8oc2tiKS0+Z3NvX3NpemUgPSBjb3JrLT5nc29fc2l6ZTsKCQkJc2tiX3NoaW5mbyhz
+            a2IpLT5nc29fdHlwZSA9IFNLQl9HU09fVURQX0w0OwoJCQlza2Jfc2hpbmZvKHNrYiktPmdzb19z
+            ZWdzID0gRElWX1JPVU5EX1VQKGRhdGFsZW4sCgkJCQkJCQkJIGNvcmstPmdzb19zaXplKTsKCQl9
+            CgkJaWYgKHNrYi0+aXBfc3VtbWVkID09IENIRUNLU1VNX1BBUlRJQUwpCgkJCWdvdG8gY3N1bV9w
+            YXJ0aWFsOwoJCWdvdG8gc2VuZDsKCX0KCicnJwoKR1NPX0lQVjYgPSByJycnCWlmIChjb3JrLT5n
+            c29fc2l6ZSkgewoJCWNvbnN0IGludCBobGVuID0gc2tiX25ldHdvcmtfaGVhZGVyX2xlbihza2Ip
+            ICsKCQkJCSBzaXplb2Yoc3RydWN0IHVkcGhkcik7CgoJCWlmIChobGVuICsgbWluKGRhdGFsZW4s
+            IChpbnQpY29yay0+Z3NvX3NpemUpID4gY29yay0+ZnJhZ3NpemUpIHsKCQkJa2ZyZWVfc2tiKHNr
+            Yik7CgkJCXJldHVybiAtRU1TR1NJWkU7CgkJfQoJCWlmIChza2ItPmxlbiA+IGNvcmstPmdzb19z
+            aXplICogVURQX01BWF9TRUdNRU5UUykgewoJCQlrZnJlZV9za2Ioc2tiKTsKCQkJcmV0dXJuIC1F
+            SU5WQUw7CgkJfQoJCWlmICh1ZHBfc2soc2spLT5ub19jaGVjazZfdHggfHwgaXNfdWRwbGl0ZSB8
+            fAoJCSAgICBkc3RfeGZybShza2JfZHN0KHNrYikpKSB7CgkJCWtmcmVlX3NrYihza2IpOwoJCQly
+            ZXR1cm4gLUVJTzsKCQl9CgkJaWYgKGRhdGFsZW4gPiBjb3JrLT5nc29fc2l6ZSkgewoJCQlza2Jf
+            c2hpbmZvKHNrYiktPmdzb19zaXplID0gY29yay0+Z3NvX3NpemU7CgkJCXNrYl9zaGluZm8oc2ti
+            KS0+Z3NvX3R5cGUgPSBTS0JfR1NPX1VEUF9MNDsKCQkJc2tiX3NoaW5mbyhza2IpLT5nc29fc2Vn
+            cyA9IERJVl9ST1VORF9VUChkYXRhbGVuLAoJCQkJCQkJCSBjb3JrLT5nc29fc2l6ZSk7CgkJfQoJ
+            CWlmIChza2ItPmlwX3N1bW1lZCA9PSBDSEVDS1NVTV9QQVJUSUFMKQoJCQlnb3RvIGNzdW1fcGFy
+            dGlhbDsKCQlnb3RvIHNlbmQ7Cgl9CgonJycKCkNNU0cgPSByJycnc3RhdGljIGludCBfX3VkcF9j
+            bXNnX3NlbmQoc3RydWN0IGNtc2doZHIgKmNtc2csIHUxNiAqZ3NvX3NpemUpCnsKCXN3aXRjaCAo
+            Y21zZy0+Y21zZ190eXBlKSB7CgljYXNlIFVEUF9TRUdNRU5UOgoJCWlmIChjbXNnLT5jbXNnX2xl
+            biAhPSBDTVNHX0xFTihzaXplb2YoX191MTYpKSkKCQkJcmV0dXJuIC1FSU5WQUw7CgkJKmdzb19z
+            aXplID0gKihfX3UxNiAqKUNNU0dfREFUQShjbXNnKTsKCQlyZXR1cm4gMDsKCWRlZmF1bHQ6CgkJ
+            cmV0dXJuIC1FSU5WQUw7Cgl9Cn0KCmludCB1ZHBfY21zZ19zZW5kKHN0cnVjdCBzb2NrICpzaywg
+            c3RydWN0IG1zZ2hkciAqbXNnLCB1MTYgKmdzb19zaXplKQp7CglzdHJ1Y3QgY21zZ2hkciAqY21z
+            ZzsKCWJvb2wgbmVlZF9pcCA9IGZhbHNlOwoJaW50IGVycjsKCglmb3JfZWFjaF9jbXNnaGRyKGNt
+            c2csIG1zZykgewoJCWlmICghQ01TR19PSyhtc2csIGNtc2cpKQoJCQlyZXR1cm4gLUVJTlZBTDsK
+            CgkJaWYgKGNtc2ctPmNtc2dfbGV2ZWwgIT0gU09MX1VEUCkgewoJCQluZWVkX2lwID0gdHJ1ZTsK
+            CQkJY29udGludWU7CgkJfQoKCQllcnIgPSBfX3VkcF9jbXNnX3NlbmQoY21zZywgZ3NvX3NpemUp
+            OwoJCWlmIChlcnIpCgkJCXJldHVybiBlcnI7Cgl9CgoJcmV0dXJuIG5lZWRfaXA7Cn0KRVhQT1JU
+            X1NZTUJPTF9HUEwodWRwX2Ntc2dfc2VuZCk7CgonJycKCgpkZWYgbWFpbigpIC0+IE5vbmU6CiAg
+            ICBzdWIoCiAgICAgICAgImluY2x1ZGUvdWFwaS9saW51eC91ZHAuaCIsCiAgICAgICAgciIoI2Rl
+            ZmluZSBVRFBfTk9fQ0hFQ0s2X1JYXHMrMTAyW15cbl0qXG4pIiwKICAgICAgICByIlwxI2RlZmlu
+            ZSBVRFBfU0VHTUVOVAkxMDMJLyogU2V0IEdTTyBzZWdtZW50YXRpb24gc2l6ZSAqL1xuIiwKICAg
+            ICAgICBhbHJlYWR5PSIjZGVmaW5lIFVEUF9TRUdNRU5UIiwKICAgICkKICAgIHN1YigKICAgICAg
+            ICAiaW5jbHVkZS9saW51eC91ZHAuaCIsCiAgICAgICAgciIoX191MTZccytsZW47XHMqL1wqW15c
+            bl0qcGVuZGluZyBmcmFtZXNbXlxuXSpcKi9cbikiLAogICAgICAgIHIiXDEJX191MTYJCSBnc29f
+            c2l6ZTsJLyogVURQIEdTTyBzZWdtZW50IHNpemUgKFVEUF9TRUdNRU5UKSAqL1xuIiwKICAgICAg
+            ICBhbHJlYWR5PSJnc29fc2l6ZTsiLAogICAgKQogICAgc3ViKAogICAgICAgICJpbmNsdWRlL25l
+            dC9pbmV0X3NvY2suaCIsCiAgICAgICAgciIoY2hhclxzK3ByaW9yaXR5O1xuKShcfTtcblxuc3Ry
+            dWN0IGluZXRfY29ya19mdWxsKSIsCiAgICAgICAgciJcMQlfX3UxNgkJCWdzb19zaXplO1xuXDIi
+            LAogICAgICAgIGFscmVhZHk9Imdzb19zaXplOyIsCiAgICApCiAgICBzdWIoCiAgICAgICAgImlu
+            Y2x1ZGUvbmV0L2lwLmgiLAogICAgICAgIHIiKGNoYXJccytwcmlvcml0eTtcbikoXH07XG5cbiNk
+            ZWZpbmUgSVBDQlwoc2tiXCkpIiwKICAgICAgICByIlwxCV9fdTE2CQkJZ3NvX3NpemU7XG5cMiIs
+            CiAgICAgICAgYWxyZWFkeT0iZ3NvX3NpemU7IiwKICAgICkKICAgIHN1YigKICAgICAgICAiaW5j
+            bHVkZS9uZXQvaXB2Ni5oIiwKICAgICAgICByIihfX3M4XHMrZG9udGZyYWc7XG4pKFx0c3RydWN0
+            IGlwdjZfdHhvcHRpb25zIFwqb3B0OykiLAogICAgICAgIHIiXDEJX191MTYgZ3NvX3NpemU7XG5c
+            MiIsCiAgICAgICAgYWxyZWFkeT0iZ3NvX3NpemU7IiwKICAgICkKICAgIHN1YigKICAgICAgICAi
+            aW5jbHVkZS9uZXQvdWRwLmgiLAogICAgICAgIHIiKHVuc2lnbmVkIGludCBtc3MsIF9fc3VtMTYg
+            Y2hlY2tcKTtcbikiLAogICAgICAgIHIiXDFcbiNkZWZpbmUgVURQX01BWF9TRUdNRU5UUwkoMSA8
+            PCA2VSlcbiIKICAgICAgICByImludCB1ZHBfY21zZ19zZW5kKHN0cnVjdCBzb2NrICpzaywgc3Ry
+            dWN0IG1zZ2hkciAqbXNnLCB1MTYgKmdzb19zaXplKTtcbiIsCiAgICAgICAgYWxyZWFkeT0idWRw
+            X2Ntc2dfc2VuZCgiLAogICAgKQogICAgc3ViKAogICAgICAgICJpbmNsdWRlL2xpbnV4L25ldGRl
+            dl9mZWF0dXJlcy5oIiwKICAgICAgICByIihORVRJRl9GX0dTT19VRFBfQklULFxzKi9cKiBcLlwu
+            XC4gVUZPLCBkZXByZWNhdGVkIGV4Y2VwdCB0dW50YXAgXCovXG4pIgogICAgICAgIHIiKFxzKi9c
+            KlwqL05FVElGX0ZfR1NPX0xBU1QgPVxzKi9cKiBsYXN0IGJpdCwgc2VlIEdTT19NQVNLIFwqL1xu
+            KSIKICAgICAgICByIihccypORVRJRl9GX0dTT19VRFBfQklULCkiLAogICAgICAgIHIiXDEJTkVU
+            SUZfRl9HU09fVURQX0w0X0JJVCwJCS8qIC4uLiBVRFAgcGF5bG9hZCBHU08gKG5vdCBVRk8pICov
+            XG4iCiAgICAgICAgciJcMgkJTkVUSUZfRl9HU09fVURQX0w0X0JJVCwiLAogICAgICAgIGFscmVh
+            ZHk9Ik5FVElGX0ZfR1NPX1VEUF9MNF9CSVQiLAogICAgKQogICAgc3ViKAogICAgICAgICJpbmNs
+            dWRlL2xpbnV4L25ldGRldl9mZWF0dXJlcy5oIiwKICAgICAgICByIigjZGVmaW5lIE5FVElGX0Zf
+            R1NPX1VEUFxzK19fTkVUSUZfRlwoR1NPX1VEUFwpXG4pIiwKICAgICAgICByIlwxI2RlZmluZSBO
+            RVRJRl9GX0dTT19VRFBfTDQJX19ORVRJRl9GKEdTT19VRFBfTDQpXG4iLAogICAgICAgIGFscmVh
+            ZHk9IiNkZWZpbmUgTkVUSUZfRl9HU09fVURQX0w0IiwKICAgICkKICAgIHN1YigKICAgICAgICAi
+            aW5jbHVkZS9saW51eC9uZXRkZXZfZmVhdHVyZXMuaCIsCiAgICAgICAgciIoI2RlZmluZSBORVRJ
+            Rl9GX0dTT19TT0ZUV0FSRVxzK1woTkVUSUZfRl9BTExfVFNPIFx8IFxcXG5ccytORVRJRl9GX0dT
+            T19TQ1RQXCkpIiwKICAgICAgICByIlwxCQkJCSBORVRJRl9GX0dTT19TQ1RQIHwgTkVUSUZfRl9H
+            U09fVURQX0w0KSIsCiAgICAgICAgYWxyZWFkeT0iTkVUSUZfRl9HU09fVURQX0w0KSIsCiAgICAp
+            CiAgICBzdWIoCiAgICAgICAgImluY2x1ZGUvbGludXgvbmV0ZGV2aWNlLmgiLAogICAgICAgIHIi
+            KEJVSUxEX0JVR19PTlwoU0tCX0dTT19VRFAgIT0gXChORVRJRl9GX0dTT19VRFAgPj4gTkVUSUZf
+            Rl9HU09fU0hJRlRcKVwpO1xuKSIsCiAgICAgICAgciJcMQlCVUlMRF9CVUdfT04oU0tCX0dTT19V
+            RFBfTDQgIT0gKE5FVElGX0ZfR1NPX1VEUF9MNCA+PiBORVRJRl9GX0dTT19TSElGVCkpO1xuIiwK
+            ICAgICAgICBhbHJlYWR5PSJTS0JfR1NPX1VEUF9MNCAhPSAoTkVUSUZfRl9HU09fVURQX0w0IiwK
+            ICAgICkKICAgIHN1YigKICAgICAgICAibmV0L2lwdjQvaXBfb3V0cHV0LmMiLAogICAgICAgIHIi
+            KGNvcmstPnR4X2ZsYWdzID0gaXBjLT50eF9mbGFncztcbikoXG5cdHJldHVybiAwOykiLAogICAg
+            ICAgIHIiXDEJY29yay0+Z3NvX3NpemUgPSBpcGMtPmdzb19zaXplO1xuXDIiLAogICAgICAgIGFs
+            cmVhZHk9ImNvcmstPmdzb19zaXplID0gaXBjLT5nc29fc2l6ZSIsCiAgICApCiAgICBzdWIoCiAg
+            ICAgICAgIm5ldC9pcHY2L2lwNl9vdXRwdXQuYyIsCiAgICAgICAgciIoY29yay0+YmFzZS5sZW5n
+            dGggPSAwO1xuKShcblx0cmV0dXJuIDA7KSIsCiAgICAgICAgciJcMQljb3JrLT5iYXNlLmdzb19z
+            aXplID0gaXBjNi0+Z3NvX3NpemU7XG5cMiIsCiAgICAgICAgYWxyZWFkeT0iY29yay0+YmFzZS5n
+            c29fc2l6ZSA9IGlwYzYtPmdzb19zaXplIiwKICAgICkKCiAgICAjIGlwdjQgdWRwX3NlbmRfc2ti
+            CiAgICBzdWIoCiAgICAgICAgIm5ldC9pcHY0L3VkcC5jIiwKICAgICAgICByInN0YXRpYyBpbnQg
+            dWRwX3NlbmRfc2tiXChzdHJ1Y3Qgc2tfYnVmZiBcKnNrYiwgc3RydWN0IGZsb3dpNCBcKmZsNFwp
+            XG4iLAogICAgICAgICJzdGF0aWMgaW50IHVkcF9zZW5kX3NrYihzdHJ1Y3Qgc2tfYnVmZiAqc2ti
+            LCBzdHJ1Y3QgZmxvd2k0ICpmbDQsXG4iCiAgICAgICAgIgkJCXN0cnVjdCBpbmV0X2NvcmsgKmNv
+            cmspXG4iLAogICAgICAgIGFscmVhZHk9InN0cnVjdCBpbmV0X2NvcmsgKmNvcmspIiwKICAgICkK
+            ICAgIHN1YigKICAgICAgICAibmV0L2lwdjQvdWRwLmMiLAogICAgICAgIHIiKGludCBsZW4gPSBz
+            a2ItPmxlbiAtIG9mZnNldDtcbikoXHRfX3dzdW0gY3N1bSA9IDA7KSIsCiAgICAgICAgciJcMQlp
+            bnQgZGF0YWxlbiA9IGxlbiAtIHNpemVvZigqdWgpO1xuXDIiLAogICAgICAgIGFscmVhZHk9Imlu
+            dCBkYXRhbGVuID0gbGVuIC0gc2l6ZW9mKCp1aCk7IiwKICAgICkKICAgIHN1YigKICAgICAgICAi
+            bmV0L2lwdjQvdWRwLmMiLAogICAgICAgIHIiKHVoLT5sZW4gPSBodG9uc1wobGVuXCk7XG5cdHVo
+            LT5jaGVjayA9IDA7XG5cbikoXHRpZiBcKGlzX3VkcGxpdGVcKSkiLAogICAgICAgIHIiXDEiICsg
+            R1NPX0lQVjQgKyByIlwyIiwKICAgICAgICBhbHJlYWR5PSJpZiAoY29yay0+Z3NvX3NpemUpIiwK
+            ICAgICkKICAgIHN1YigKICAgICAgICAibmV0L2lwdjQvdWRwLmMiLAogICAgICAgIHIiKGVsc2Ug
+            aWYgXChza2ItPmlwX3N1bW1lZCA9PSBDSEVDS1NVTV9QQVJUSUFMXCkgXHsgL1wqIFVEUCBoYXJk
+            d2FyZSBjc3VtIFwqL1xuXG4pIgogICAgICAgIHIiKFx0XHR1ZHA0X2h3Y3N1bVwoc2tiLCBmbDQt
+            PnNhZGRyLCBmbDQtPmRhZGRyXCk7KSIsCiAgICAgICAgciJcMWNzdW1fcGFydGlhbDpcblxuXDIi
+            LAogICAgICAgIGFscmVhZHk9IlxuY3N1bV9wYXJ0aWFsOlxuIiwKICAgICkKICAgIHN1YigKICAg
+            ICAgICAibmV0L2lwdjQvdWRwLmMiLAogICAgICAgIHIiZXJyID0gdWRwX3NlbmRfc2tiXChza2Is
+            IGZsNFwpOyIsCiAgICAgICAgImVyciA9IHVkcF9zZW5kX3NrYihza2IsIGZsNCwgJmluZXQtPmNv
+            cmsuYmFzZSk7IiwKICAgICAgICBhbHJlYWR5PSJ1ZHBfc2VuZF9za2Ioc2tiLCBmbDQsICZpbmV0
+            LT5jb3JrLmJhc2UpIiwKICAgICkKICAgIHN1YigKICAgICAgICAibmV0L2lwdjQvdWRwLmMiLAog
+            ICAgICAgIHIiKEVYUE9SVF9TWU1CT0xcKHVkcF9wdXNoX3BlbmRpbmdfZnJhbWVzXCk7XG5cbiko
+            aW50IHVkcF9zZW5kbXNnXCgpIiwKICAgICAgICByIlwxIiArIENNU0cgKyByIlwyIiwKICAgICAg
+            ICBhbHJlYWR5PSJpbnQgdWRwX2Ntc2dfc2VuZChzdHJ1Y3Qgc29jayAqc2ssIHN0cnVjdCBtc2do
+            ZHIgKm1zZywgdTE2ICpnc29fc2l6ZSkiLAogICAgKQogICAgc3ViKAogICAgICAgICJuZXQvaXB2
+            NC91ZHAuYyIsCiAgICAgICAgciIoaXBjLnRvcyA9IC0xO1xuKSIsCiAgICAgICAgciJcMQlpcGMu
+            Z3NvX3NpemUgPSB1cC0+Z3NvX3NpemU7XG4iLAogICAgICAgIGFscmVhZHk9ImlwYy5nc29fc2l6
+            ZSA9IHVwLT5nc29fc2l6ZSIsCiAgICApCiAgICBzdWIoCiAgICAgICAgIm5ldC9pcHY0L3VkcC5j
+            IiwKICAgICAgICByImVyciA9IGlwX2Ntc2dfc2VuZFwoc2ssIG1zZywgJmlwYywgc2stPnNrX2Zh
+            bWlseSA9PSBBRl9JTkVUNlwpO1xuIgogICAgICAgIHIiXHRcdGlmIFwodW5saWtlbHlcKGVyclwp
+            XCkgXHsiLAogICAgICAgICJlcnIgPSB1ZHBfY21zZ19zZW5kKHNrLCBtc2csICZpcGMuZ3NvX3Np
+            emUpO1xuIgogICAgICAgICIJCWlmIChlcnIgPiAwKVxuIgogICAgICAgICIJCQllcnIgPSBpcF9j
+            bXNnX3NlbmQoc2ssIG1zZywgJmlwYyxcbiIKICAgICAgICAiCQkJCQkgICBzay0+c2tfZmFtaWx5
+            ID09IEFGX0lORVQ2KTtcbiIKICAgICAgICAiCQlpZiAodW5saWtlbHkoZXJyIDwgMCkpIHsiLAog
+            ICAgICAgIGFscmVhZHk9InVkcF9jbXNnX3NlbmQoc2ssIG1zZywgJmlwYy5nc29fc2l6ZSkiLAog
+            ICAgKQogICAgc3ViKAogICAgICAgICJuZXQvaXB2NC91ZHAuYyIsCiAgICAgICAgciIoaWYgXCgh
+            Y29ya3JlcVwpIFx7XG4pIgogICAgICAgIHIiKFx0XHRza2IgPSBpcF9tYWtlX3NrYlwoc2ssIGZs
+            NCwgZ2V0ZnJhZywgbXNnLCB1bGVuLFxuIgogICAgICAgIHIiXHRcdFx0XHQgIHNpemVvZlwoc3Ry
+            dWN0IHVkcGhkclwpLCAmaXBjLCAmcnQsXG4iCiAgICAgICAgciJcdFx0XHRcdCAgbXNnLT5tc2df
+            ZmxhZ3NcKTtcbiIKICAgICAgICByIlx0XHRlcnIgPSBQVFJfRVJSXChza2JcKTtcbiIKICAgICAg
+            ICByIlx0XHRpZiBcKCFJU19FUlJfT1JfTlVMTFwoc2tiXClcKVxuIgogICAgICAgIHIiXHRcdFx0
+            ZXJyID0gdWRwX3NlbmRfc2tiXChza2IsIGZsNFwpOykiLAogICAgICAgIHIiXDEJCXN0cnVjdCBp
+            bmV0X2NvcmsgY29yaztcbiIKICAgICAgICByIlxuIgogICAgICAgIHIiCQlza2IgPSBpcF9tYWtl
+            X3NrYihzaywgZmw0LCBnZXRmcmFnLCBtc2csIHVsZW4sXG4iCiAgICAgICAgciIJCQkJICBzaXpl
+            b2Yoc3RydWN0IHVkcGhkciksICZpcGMsICZydCxcbiIKICAgICAgICByIgkJCQkgIG1zZy0+bXNn
+            X2ZsYWdzKTtcbiIKICAgICAgICByIgkJZXJyID0gUFRSX0VSUihza2IpO1xuIgogICAgICAgIHIi
+            CQlpZiAoIUlTX0VSUl9PUl9OVUxMKHNrYikpIHtcbiIKICAgICAgICByIgkJCWNvcmsuZ3NvX3Np
+            emUgPSBpcGMuZ3NvX3NpemU7XG4iCiAgICAgICAgciIJCQljb3JrLmZyYWdzaXplID0gaXBfc2tf
+            dXNlX3BtdHUoc2spID9cbiIKICAgICAgICByIgkJCQlkc3RfbXR1KHNrYl9kc3Qoc2tiKSkgOlxu
+            IgogICAgICAgIHIiCQkJCXNrYl9kc3Qoc2tiKS0+ZGV2LT5tdHU7XG4iCiAgICAgICAgciIJCQll
+            cnIgPSB1ZHBfc2VuZF9za2Ioc2tiLCBmbDQsICZjb3JrKTtcbiIKICAgICAgICByIgkJfSIsCiAg
+            ICAgICAgYWxyZWFkeT0iY29yay5nc29fc2l6ZSA9IGlwYy5nc29fc2l6ZSIsCiAgICApCiAgICBz
+            dWIoCiAgICAgICAgIm5ldC9pcHY0L3VkcC5jIiwKICAgICAgICByIihjYXNlIFVEUF9OT19DSEVD
+            SzZfUlg6XG5cdFx0dXAtPm5vX2NoZWNrNl9yeCA9IHZhbGJvb2w7XG5cdFx0YnJlYWs7XG5cbiki
+            LAogICAgICAgIHIiXDEJY2FzZSBVRFBfU0VHTUVOVDpcbiIKICAgICAgICByIgkJaWYgKHZhbCA8
+            IDAgfHwgdmFsID4gVVNIUlRfTUFYKVxuIgogICAgICAgIHIiCQkJcmV0dXJuIC1FSU5WQUw7XG4i
+            CiAgICAgICAgciIJCXVwLT5nc29fc2l6ZSA9IHZhbDtcbiIKICAgICAgICByIgkJYnJlYWs7XG5c
+            biIsCiAgICAgICAgYWxyZWFkeT0idXAtPmdzb19zaXplID0gdmFsIiwKICAgICkKICAgIHN1YigK
+            ICAgICAgICAibmV0L2lwdjQvdWRwLmMiLAogICAgICAgIHIiKGNhc2UgVURQX05PX0NIRUNLNl9S
+            WDpcblx0XHR2YWwgPSB1cC0+bm9fY2hlY2s2X3J4O1xuXHRcdGJyZWFrO1xuXG4pIiwKICAgICAg
+            ICByIlwxCWNhc2UgVURQX1NFR01FTlQ6XG4iCiAgICAgICAgciIJCXZhbCA9IHVwLT5nc29fc2l6
+            ZTtcbiIKICAgICAgICByIgkJYnJlYWs7XG5cbiIsCiAgICAgICAgYWxyZWFkeT0idmFsID0gdXAt
+            Pmdzb19zaXplIiwKICAgICkKCiAgICAjIGlwdjYKICAgIHN1YigKICAgICAgICAibmV0L2lwdjYv
+            dWRwLmMiLAogICAgICAgIHIic3RhdGljIGludCB1ZHBfdjZfc2VuZF9za2JcKHN0cnVjdCBza19i
+            dWZmIFwqc2tiLCBzdHJ1Y3QgZmxvd2k2IFwqZmw2XClcbiIsCiAgICAgICAgInN0YXRpYyBpbnQg
+            dWRwX3Y2X3NlbmRfc2tiKHN0cnVjdCBza19idWZmICpza2IsIHN0cnVjdCBmbG93aTYgKmZsNixc
+            biIKICAgICAgICAiCQkJICAgc3RydWN0IGluZXRfY29yayAqY29yaylcbiIsCiAgICAgICAgYWxy
+            ZWFkeT0ic3RydWN0IGluZXRfY29yayAqY29yaykiLAogICAgKQogICAgc3ViKAogICAgICAgICJu
+            ZXQvaXB2Ni91ZHAuYyIsCiAgICAgICAgciIoaW50IG9mZnNldCA9IHNrYl90cmFuc3BvcnRfb2Zm
+            c2V0XChza2JcKTtcbiIKICAgICAgICByIlx0aW50IGxlbiA9IHNrYi0+bGVuIC0gb2Zmc2V0O1xu
+            KSIsCiAgICAgICAgciJcMQlpbnQgZGF0YWxlbiA9IGxlbiAtIHNpemVvZigqdWgpO1xuIiwKICAg
+            ICAgICBhbHJlYWR5PSJpbnQgZGF0YWxlbiA9IGxlbiAtIHNpemVvZigqdWgpOyIsCiAgICApCiAg
+            ICBzdWIoCiAgICAgICAgIm5ldC9pcHY2L3VkcC5jIiwKICAgICAgICByIih1aC0+bGVuID0gaHRv
+            bnNcKGxlblwpO1xuXHR1aC0+Y2hlY2sgPSAwO1xuXG4pKFx0aWYgXChpc191ZHBsaXRlXClcblx0
+            XHRjc3VtID0gdWRwbGl0ZV9jc3VtXChza2JcKTspIiwKICAgICAgICByIlwxIiArIEdTT19JUFY2
+            ICsgciJcMiIsCiAgICAgICAgYWxyZWFkeT0iaWYgKGNvcmstPmdzb19zaXplKSIsCiAgICApCiAg
+            ICBzdWIoCiAgICAgICAgIm5ldC9pcHY2L3VkcC5jIiwKICAgICAgICByIihlbHNlIGlmIFwoc2ti
+            LT5pcF9zdW1tZWQgPT0gQ0hFQ0tTVU1fUEFSVElBTFwpIFx7IC9cKiBVRFAgaGFyZHdhcmUgY3N1
+            bSBcKi9cbikiCiAgICAgICAgciIoXHRcdHVkcDZfaHdjc3VtX291dGdvaW5nXChzaywgc2tiLCAm
+            Zmw2LT5zYWRkciwgJmZsNi0+ZGFkZHIsIGxlblwpOykiLAogICAgICAgIHIiXDFjc3VtX3BhcnRp
+            YWw6XG5cMiIsCiAgICAgICAgYWxyZWFkeT0iXG5jc3VtX3BhcnRpYWw6XG4iLAogICAgKQogICAg
+            c3ViKAogICAgICAgICJuZXQvaXB2Ni91ZHAuYyIsCiAgICAgICAgciJlcnIgPSB1ZHBfdjZfc2Vu
+            ZF9za2JcKHNrYiwgJmZsNlwpOyIsCiAgICAgICAgImVyciA9IHVkcF92Nl9zZW5kX3NrYihza2Is
+            ICZmbDYsICZpbmV0X3NrKHNrKS0+Y29yay5iYXNlKTsiLAogICAgICAgIGFscmVhZHk9InVkcF92
+            Nl9zZW5kX3NrYihza2IsICZmbDYsICZpbmV0X3NrKHNrKS0+Y29yay5iYXNlKSIsCiAgICApCiAg
+            ICBzdWIoCiAgICAgICAgIm5ldC9pcHY2L3VkcC5jIiwKICAgICAgICByIihpcGM2LmRvbnRmcmFn
+            ID0gLTE7XG4pIiwKICAgICAgICByIlwxCWlwYzYuZ3NvX3NpemUgPSB1cC0+Z3NvX3NpemU7XG4i
+            LAogICAgICAgIGFscmVhZHk9ImlwYzYuZ3NvX3NpemUgPSB1cC0+Z3NvX3NpemUiLAogICAgKQog
+            ICAgc3ViKAogICAgICAgICJuZXQvaXB2Ni91ZHAuYyIsCiAgICAgICAgciJlcnIgPSBpcDZfZGF0
+            YWdyYW1fc2VuZF9jdGxcKHNvY2tfbmV0XChza1wpLCBzaywgbXNnLCAmZmw2LCAmaXBjNiwgJnNv
+            Y2tjXCk7IiwKICAgICAgICAiZXJyID0gdWRwX2Ntc2dfc2VuZChzaywgbXNnLCAmaXBjNi5nc29f
+            c2l6ZSk7XG4iCiAgICAgICAgIgkJaWYgKGVyciA+IDApXG4iCiAgICAgICAgIgkJCWVyciA9IGlw
+            Nl9kYXRhZ3JhbV9zZW5kX2N0bChzb2NrX25ldChzayksIHNrLCBtc2csICZmbDYsXG4iCiAgICAg
+            ICAgIgkJCQkJCSAgICAmaXBjNiwgJnNvY2tjKTsiLAogICAgICAgIGFscmVhZHk9InVkcF9jbXNn
+            X3NlbmQoc2ssIG1zZywgJmlwYzYuZ3NvX3NpemUpIiwKICAgICkKICAgIHN1YigKICAgICAgICAi
+            bmV0L2lwdjYvdWRwLmMiLAogICAgICAgIHIiKGlmIFwoIWNvcmtyZXFcKSBce1xuXHRcdHN0cnVj
+            dCBza19idWZmIFwqc2tiO1xuXG4pIgogICAgICAgIHIiKFx0XHRza2IgPSBpcDZfbWFrZV9za2Jc
+            KHNrLCBnZXRmcmFnLCBtc2csIHVsZW4sXG4iCiAgICAgICAgciJcdFx0XHRcdCAgIHNpemVvZlwo
+            c3RydWN0IHVkcGhkclwpLCAmaXBjNixcbiIKICAgICAgICByIlx0XHRcdFx0ICAgJmZsNiwgXChz
+            dHJ1Y3QgcnQ2X2luZm8gXCpcKWRzdCxcbiIKICAgICAgICByIlx0XHRcdFx0ICAgbXNnLT5tc2df
+            ZmxhZ3MsICZzb2NrY1wpO1xuIgogICAgICAgIHIiXHRcdGVyciA9IFBUUl9FUlJcKHNrYlwpO1xu
+            IgogICAgICAgIHIiXHRcdGlmIFwoIUlTX0VSUl9PUl9OVUxMXChza2JcKVwpXG4iCiAgICAgICAg
+            ciJcdFx0XHRlcnIgPSB1ZHBfdjZfc2VuZF9za2JcKHNrYiwgJmZsNlwpOykiLAogICAgICAgIHIi
+            XDEJCXN0cnVjdCBpbmV0X2NvcmsgY29yaztcbiIKICAgICAgICByIlxuIgogICAgICAgIHIiCQlz
+            a2IgPSBpcDZfbWFrZV9za2Ioc2ssIGdldGZyYWcsIG1zZywgdWxlbixcbiIKICAgICAgICByIgkJ
+            CQkgICBzaXplb2Yoc3RydWN0IHVkcGhkciksICZpcGM2LFxuIgogICAgICAgIHIiCQkJCSAgICZm
+            bDYsIChzdHJ1Y3QgcnQ2X2luZm8gKilkc3QsXG4iCiAgICAgICAgciIJCQkJICAgbXNnLT5tc2df
+            ZmxhZ3MsICZzb2NrYyk7XG4iCiAgICAgICAgciIJCWVyciA9IFBUUl9FUlIoc2tiKTtcbiIKICAg
+            ICAgICByIgkJaWYgKCFJU19FUlJfT1JfTlVMTChza2IpKSB7XG4iCiAgICAgICAgciIJCQljb3Jr
+            Lmdzb19zaXplID0gaXBjNi5nc29fc2l6ZTtcbiIKICAgICAgICByIgkJCWNvcmsuZnJhZ3NpemUg
+            PSBkc3RfbXR1KHNrYl9kc3Qoc2tiKSk7XG4iCiAgICAgICAgciIJCQllcnIgPSB1ZHBfdjZfc2Vu
+            ZF9za2Ioc2tiLCAmZmw2LCAmY29yayk7XG4iCiAgICAgICAgciIJCX0iLAogICAgICAgIGFscmVh
+            ZHk9ImNvcmsuZ3NvX3NpemUgPSBpcGM2Lmdzb19zaXplIiwKICAgICkKCiAgICBzdWIoCiAgICAg
+            ICAgIm5ldC9pcHY0L3VkcF9vZmZsb2FkLmMiLAogICAgICAgIHIiKGlmIFwoIWNhbl9jaGVja3N1
+            bV9wcm90b2NvbFwoZmVhdHVyZXMsIGh0b25zXChFVEhfUF9JUFwpXClcKVxuKSIKICAgICAgICBy
+            Ilx0XHRyZXR1cm4gRVJSX1BUUlwoLUVJT1wpOyIsCiAgICAgICAgciJcMQkJZmVhdHVyZXMgJj0g
+            fihORVRJRl9GX0NTVU1fTUFTSyB8IE5FVElGX0ZfR1NPX01BU0spOyIsCiAgICAgICAgYWxyZWFk
+            eT0iZmVhdHVyZXMgJj0gfihORVRJRl9GX0NTVU1fTUFTSyB8IE5FVElGX0ZfR1NPX01BU0spIiwK
+            ICAgICkKICAgIHN1YigKICAgICAgICAibmV0L2lwdjYvdWRwX29mZmxvYWQuYyIsCiAgICAgICAg
+            ciIoaWYgXCghY2FuX2NoZWNrc3VtX3Byb3RvY29sXChmZWF0dXJlcywgaHRvbnNcKEVUSF9QX0lQ
+            VjZcKVwpXClcbikiCiAgICAgICAgciJcdFx0cmV0dXJuIEVSUl9QVFJcKC1FSU9cKTsiLAogICAg
+            ICAgIHIiXDEJCWZlYXR1cmVzICY9IH4oTkVUSUZfRl9DU1VNX01BU0sgfCBORVRJRl9GX0dTT19N
+            QVNLKTsiLAogICAgICAgIGFscmVhZHk9ImZlYXR1cmVzICY9IH4oTkVUSUZfRl9DU1VNX01BU0sg
+            fCBORVRJRl9GX0dTT19NQVNLKSIsCiAgICApCgogICAgbGVmdG92ZXI0ID0gcmUuZmluZGFsbChy
+            InVkcF9zZW5kX3NrYlwoW147XSpmbDRcKTsiLCByZWFkKCJuZXQvaXB2NC91ZHAuYyIpKQogICAg
+            bGVmdG92ZXI0ID0gW3ggZm9yIHggaW4gbGVmdG92ZXI0IGlmICIsICYiIG5vdCBpbiB4IGFuZCAi
+            LCBjb3JrIiBub3QgaW4geF0KICAgIGlmIGxlZnRvdmVyNDoKICAgICAgICBzeXMuZXhpdChmIkZB
+            SUwgbGVmdG92ZXIgMi1hcmcgdWRwX3NlbmRfc2tiOiB7bGVmdG92ZXI0fSIpCiAgICBsZWZ0b3Zl
+            cjYgPSByZS5maW5kYWxsKHIidWRwX3Y2X3NlbmRfc2tiXChbXjtdKiZmbDZcKTsiLCByZWFkKCJu
+            ZXQvaXB2Ni91ZHAuYyIpKQogICAgbGVmdG92ZXI2ID0gW3ggZm9yIHggaW4gbGVmdG92ZXI2IGlm
+            ICIsICYiIG5vdCBpbiB4LnNwbGl0KCImZmw2IilbLTFdXQogICAgbGVmdG92ZXI2ID0gW3ggZm9y
+            IHggaW4gbGVmdG92ZXI2IGlmIHguc3RyaXAoKS5lbmRzd2l0aCgiJmZsNik7IildCiAgICBpZiBs
+            ZWZ0b3ZlcjY6CiAgICAgICAgc3lzLmV4aXQoZiJGQUlMIGxlZnRvdmVyIDItYXJnIHVkcF92Nl9z
+            ZW5kX3NrYjoge2xlZnRvdmVyNn0iKQoKICAgIHByaW50KCJVRFBfU0VHTUVOVCA0LjE0IGJhY2tw
+            b3J0IGNvbXBsZXRlIikKCgppZiBfX25hbWVfXyA9PSAiX19tYWluX18iOgogICAgbWFpbigpCg==
+          """
+          pathlib.Path("/tmp/apply_udp_segment.py").write_bytes(
+              base64.b64decode(re.sub(r"\s+", "", raw))
+          )
+          PY
+          python3 /tmp/apply_udp_segment.py "$GITHUB_WORKSPACE/device_kernel"
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          p = Path("include/linux/netdev_features.h")
+          t = p.read_text()
+          t2, n = re.subn(
+              r"NETIF_F_GSO_SCTP\)\s+NETIF_F_GSO_SCTP\s*\|\s*NETIF_F_GSO_UDP_L4\)",
+              "NETIF_F_GSO_SCTP | NETIF_F_GSO_UDP_L4)",
+              t,
+              count=1,
+          )
+          if n != 1:
+              raise SystemExit(f"NETIF_F_GSO_SOFTWARE fix failed n={n}")
+          p.write_text(t2)
+          print("fixed NETIF_F_GSO_SOFTWARE")
+          PY
+
+          # 2) VPNHide Next in-tree inject (upstream-4.14)
+          git clone --depth 1 https://github.com/soranerai/vpnhide_next_backend.git /tmp/vpnhide_next_backend
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("/tmp/vpnhide_next_backend/kpatch/scripts/inject_legacy.py")
+          t = p.read_text()
+          old = 'if ipv6_route_show == "ipv6_route_native_seq_show":'
+          if old not in t:
+              raise SystemExit("inject_legacy.py: ipv6 if not found")
+          t = t.replace(
+              old,
+              'if ipv6_route_show == "ipv6_route_native_seq_show" or "fib6_dst" in common.read("net/ipv6/ip6_fib.c"):',
+              1,
+          )
+          t = t.replace(
+              'ipv6_anchor = "\\tdev = rt->fib6_nh.nh_dev;"',
+              'ipv6_anchor = "\\tseq_printf(seq, \\" %08x"',
+              1,
+          )
+          p.write_text(t)
+          print("patched inject_legacy.py for Samsung fib6_info")
+          PY
+          sed -i 's/#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 18, 0)/#if defined(UDP_SEGMENT)/' \
+            /tmp/vpnhide_next_backend/kpatch/security/vpnhide/hook_socket.c
+          bash /tmp/vpnhide_next_backend/kpatch/scripts/apply.sh "$GITHUB_WORKSPACE/device_kernel" upstream-4.14
+          grep -q '^CONFIG_VPNHIDE=y' arch/arm64/configs/exynos9820_defconfig \
+            || echo 'CONFIG_VPNHIDE=y' >> arch/arm64/configs/exynos9820_defconfig
+
+          grep -q '^#define UDP_SEGMENT' include/uapi/linux/udp.h
+          grep -q 'CONFIG_VPNHIDE' security/Makefile
+          test -f security/vpnhide/core.c
+          echo "VPNHide + UDP_SEGMENT ready"
+    
+      - name: 🧩 Patch Kernel of NoMount
+        shell: bash
+        run: |
+          set -x
+          cd $GITHUB_WORKSPACE/device_kernel
+          # Fetch and run official setup.sh script from master branch
+          curl -sSL https://raw.githubusercontent.com/maxsteeel/nomount/master/kernel/setup.sh -o /tmp/nomount_setup.sh
+          chmod +x /tmp/nomount_setup.sh
+          sh /tmp/nomount_setup.sh
+          # Add NoMount config to defconfig
+          echo "CONFIG_NOMOUNT=y" >> arch/arm64/configs/${{ env.DEFCONFIG_NAME }}
+          echo "[+] NoMount integration completed."
+
+      - name: 🧰 Patch Kernel of Re:Kernel
+        if: env.REKERNEL_ENABLE == 'true'
+        uses: ./.github/workflows/patch-rekernel
+
+      - name: 🛠️ Fix Re-Kernel TRANSACTION conflict
+        if: env.REKERNEL_ENABLE == 'true'
+        shell: bash
+        run: |
+          cd $GITHUB_WORKSPACE/device_kernel
+          sed -i 's/\bTRANSACTION\b/REKERNEL_TRANSACTION/g' include/net/rekernel.h
+          
+      - name: 💿 Patch Kernel of Droidspaces
+        uses: ./.github/workflows/patch-droidspaces
+            
+      - name: ➕ Add Non-GKI configs and Optimize
+        shell: bash
+        run: |
+          cd $GITHUB_WORKSPACE/device_kernel
+          DEFCONFIG_FILE="arch/arm64/configs/${{ env.DEFCONFIG_NAME }}"
+
+          sed -i '/CONFIG_SCHED_BORE/d' "$DEFCONFIG_FILE"
+          echo "CONFIG_SCHED_BORE=y" >> "$DEFCONFIG_FILE"
+
+          sed -i \
+            -e 's/^CONFIG_SLUB_DEBUG=y$/# CONFIG_SLUB_DEBUG is not set/' \
+            -e 's/^CONFIG_SEC_NAD=y$/# CONFIG_SEC_NAD is not set/' \
+            -e 's/^CONFIG_DEBUG_INFO=y$/# CONFIG_DEBUG_INFO is not set/' \
+            -e 's/^CONFIG_SCHED_INFO=y$/# CONFIG_SCHED_INFO is not set/' \
+            -e 's/^CONFIG_SCHEDSTATS=y$/# CONFIG_SCHEDSTATS is not set/' \
+            -e 's/^CONFIG_MALI_DEBUG_SYS=y$/# CONFIG_MALI_DEBUG_SYS is not set/' \
+            -e 's/^CONFIG_MALI_EXYNOS_DEBUG=y$/# CONFIG_MALI_EXYNOS_DEBUG is not set/' \
+            -e 's/^CONFIG_ION_DEBUG_EVENT_RECORD=y$/# CONFIG_ION_DEBUG_EVENT_RECORD is not set/' \
+            -e 's/^CONFIG_MMC_DW_DEBUG=y$/# CONFIG_MMC_DW_DEBUG is not set/' \
+            -e 's/^CONFIG_SCSI_UFS_CMD_LOGGING=y$/# CONFIG_SCSI_UFS_CMD_LOGGING is not set/' \
+            -e 's/^CONFIG_F2FS_SEC_BLOCK_OPERATIONS_DEBUG=y$/# CONFIG_F2FS_SEC_BLOCK_OPERATIONS_DEBUG is not set/' \
+            -e 's/^CONFIG_PRINTK_PROCESS=y$/# CONFIG_PRINTK_PROCESS is not set/' \
+            -e 's/^CONFIG_CONSOLE_LOGLEVEL_DEFAULT=7$/CONFIG_CONSOLE_LOGLEVEL_DEFAULT=4/' \
+            -e 's/^CONFIG_UEVENT_HELPER=y$/# CONFIG_UEVENT_HELPER is not set/' \
+            -e 's/^CONFIG_MQ_IOSCHED_KYBER=y$/# CONFIG_MQ_IOSCHED_KYBER is not set/' \
+            "$DEFCONFIG_FILE"
+
+          sed -i '/CONFIG_KSU_SUSFS_SPOOF_UNAME/d' "$DEFCONFIG_FILE"
+          echo "# CONFIG_KSU_SUSFS_SPOOF_UNAME is not set" >> "$DEFCONFIG_FILE"
+
+          sed -i '/CONFIG_SCSI_MQ_DEFAULT/d' "$DEFCONFIG_FILE"
+          echo "CONFIG_SCSI_MQ_DEFAULT=y" >> "$DEFCONFIG_FILE"
+          echo "CONFIG_MQ_IOSCHED_DEADLINE=y" >> "$DEFCONFIG_FILE"
+          echo "# CONFIG_MQ_IOSCHED_KYBER is not set" >> "$DEFCONFIG_FILE"
+
+      - name: 🔒 Patch Kernel of Baseband Guard
+        uses: ./.github/workflows/patch-baseband-guard
+
+      - name: 🛡️ Inject Fake Access Rules to KernelSU V2
+        shell: python
+        run: |
+          import os
+          import re
+          
+          target = None
+          for root, dirs, files in os.walk("."):
+              if "selinux_hide.c" in files:
+                  target = os.path.join(root, "selinux_hide.c")
+                  break
+          
+          if not target:
+              print("[-] ERROR: selinux_hide.c not found!")
+              exit(1)
+              
+          with open(target, "r", encoding="utf-8") as f:
+              content = f.read()
+          
+          inject = """
+              /* ===== ADDED STRICT BYPASS ===== */
+              if (strcmp(scon, "u:r:fsck_untrusted:s0") == 0 && strcmp(tcon, "u:r:fsck_untrusted:s0") == 0) {
+                  length = scnprintf(buf, SIMPLE_TRANSACTION_LIMIT, "%x %x %x %x %u %x", 0, 0xffffffff, 0, 0xffffffff, 1, 0);
+                  goto out;
+              }
+              if (strcmp(scon, "u:r:shell:s0") == 0 && strcmp(tcon, "u:r:su:s0") == 0) {
+                  length = scnprintf(buf, SIMPLE_TRANSACTION_LIMIT, "%x %x %x %x %u %x", 0, 0xffffffff, 0, 0xffffffff, 1, 0);
+                  goto out;
+              }
+              if (strcmp(scon, "u:r:adbd:s0") == 0 && strcmp(tcon, "u:r:adbroot:s0") == 0) {
+                  length = scnprintf(buf, SIMPLE_TRANSACTION_LIMIT, "%x %x %x %x %u %x", 0, 0xffffffff, 0, 0xffffffff, 1, 0);
+                  goto out;
+              }
+              /* ================================ */
+          """
+          
+          pattern = re.compile(r'(if\s*\(\s*sscanf\s*\(\s*buf,\s*"%s\s+%s\s+%hu",\s*scon,\s*tcon,\s*&tclass\s*\)\s*!=\s*3\s*\)\s*goto\s*out;)')
+          
+          if pattern.search(content):
+              content = pattern.sub(r'\g<1>\n' + inject, content, count=1)
+              with open(target, "w", encoding="utf-8") as f:
+                  f.write(content)
+              print("[+] V2 Bypass code successfully injected!")
+          else:
+              print("[-] ERROR: sscanf line not found.")
+              exit(1)
+              
+      - name: 🚀 Build Process
+        uses: ./.github/workflows/build-process
+          
+      - name: ❗ Universal Kernel Pack Process
+        shell: bash
+        run: |
+          cd $GITHUB_WORKSPACE/device_kernel
+
+          MODEL="${{ matrix.model }}"
+          SOC="${{ matrix.soc }}"
+          BOARD="${{ matrix.board }}"
+          DTBO_CFG="${{ matrix.dtbo_cfg }}"
+          TIME=$(date +"%Y%m%d%H%M%S")
+          
+          OUT_DIR="build/out/$MODEL"
+          KERNEL_PATH="$OUT_DIR/Image"
+          RAMDISK="$OUT_DIR/ramdisk.cpio.gz"
+          OUTPUT_FILE="$OUT_DIR/boot.img"
+
+          KERNEL_OFFSET=0x00008000
+          RAMDISK_OFFSET=0xF0000000
+          SECOND_OFFSET=0xF0000000
+          TAGS_OFFSET=0x00000100
+          BASE=0x10000000
+          CMDLINE='loop.max_part=7'
+          HASHTYPE=sha1
+          HEADER_VERSION=1
+          OS_PATCH_LEVEL=2026-09
+          OS_VERSION=16.0.0
+          PAGESIZE=2048
+
+          mkdir -p $OUT_DIR/zip/files
+          mkdir -p $OUT_DIR/zip/META-INF/com/google/android
+
+          cp -f out/arch/arm64/boot/Image $KERNEL_PATH
+
+          ./toolchain/mkdtimg cfg_create $OUT_DIR/dtb.img build/dtconfigs/${SOC}.cfg -d out/arch/arm64/boot/dts/exynos
+          ./toolchain/mkdtimg cfg_create $OUT_DIR/dtbo.img build/dtconfigs/${DTBO_CFG}.cfg -d out/arch/arm64/boot/dts/samsung
+
+          pushd build/ramdisk > /dev/null
+          find . ! -name . | LC_ALL=C sort | cpio -o -H newc -R root:root | gzip > ../out/$MODEL/ramdisk.cpio.gz || exit 1
+          popd > /dev/null
+
+          ./toolchain/mkbootimg --base $BASE --board $BOARD --cmdline "$CMDLINE" --hashtype $HASHTYPE --header_version $HEADER_VERSION --kernel $KERNEL_PATH --kernel_offset $KERNEL_OFFSET --os_patch_level $OS_PATCH_LEVEL --os_version $OS_VERSION --pagesize $PAGESIZE --ramdisk $RAMDISK --ramdisk_offset $RAMDISK_OFFSET --second_offset $SECOND_OFFSET --tags_offset $TAGS_OFFSET -o $OUTPUT_FILE
+
+          cp $OUTPUT_FILE $OUT_DIR/zip/files/boot.img
+          cp $OUT_DIR/dtb.img $OUT_DIR/zip/files/dtb.img
+          cp $OUT_DIR/dtbo.img $OUT_DIR/zip/files/dtbo.img
+          cp build/update-binary $OUT_DIR/zip/META-INF/com/google/android/update-binary
+          cp build/updater-script $OUT_DIR/zip/META-INF/com/google/android/updater-script
+
+          mkdir tmp
+          cp -rp $OUT_DIR/zip/* tmp
+          cd tmp
+          7za a -mx9 tmp.zip *
+          cd ..
+          cp -fp tmp/tmp.zip ${{ matrix.model }}-${{ env.ROM_TEXT }}-$TIME-${{ env.PACK_METHOD }}.zip
+          rm -rf tmp
+
+          echo "PACK_NAME=${{ matrix.model }}-${{ env.ROM_TEXT }}-$TIME-${{ env.PACK_METHOD }}.zip" >> $GITHUB_ENV
+
+      - name: ✏️ Upload Artifacts
+        uses: ./.github/workflows/upload-files
