@@ -91,6 +91,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
+      max-parallel: 2
       matrix:
         include:
           # S10 Series (Exynos 9820)
