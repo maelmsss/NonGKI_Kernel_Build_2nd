@@ -583,14 +583,11 @@ jobs:
             -e 's/^CONFIG_PRINTK_PROCESS=y$/# CONFIG_PRINTK_PROCESS is not set/' \
             -e 's/^CONFIG_CONSOLE_LOGLEVEL_DEFAULT=7$/CONFIG_CONSOLE_LOGLEVEL_DEFAULT=4/' \
             -e 's/^CONFIG_UEVENT_HELPER=y$/# CONFIG_UEVENT_HELPER is not set/' \
-            -e 's/^CONFIG_MQ_IOSCHED_KYBER=y$/# CONFIG_MQ_IOSCHED_KYBER is not set/' \
             "$DEFCONFIG_FILE"
 
           sed -i '/CONFIG_KSU_SUSFS_SPOOF_UNAME/d' "$DEFCONFIG_FILE"
           echo "# CONFIG_KSU_SUSFS_SPOOF_UNAME is not set" >> "$DEFCONFIG_FILE"
 
-          sed -i '/CONFIG_SCSI_MQ_DEFAULT/d' "$DEFCONFIG_FILE"
-          echo "CONFIG_SCSI_MQ_DEFAULT=y" >> "$DEFCONFIG_FILE"
           echo "CONFIG_MQ_IOSCHED_SSG=y" >> "$DEFCONFIG_FILE"
           echo "CONFIG_MQ_IOSCHED_SSG_CGROUP=y" >> "$DEFCONFIG_FILE"
           echo "CONFIG_MQ_IOSCHED_KYBER=y" >> "$DEFCONFIG_FILE"
