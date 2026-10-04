@@ -591,8 +591,9 @@ jobs:
 
           sed -i '/CONFIG_SCSI_MQ_DEFAULT/d' "$DEFCONFIG_FILE"
           echo "CONFIG_SCSI_MQ_DEFAULT=y" >> "$DEFCONFIG_FILE"
-          echo "CONFIG_MQ_IOSCHED_DEADLINE=y" >> "$DEFCONFIG_FILE"
-          echo "# CONFIG_MQ_IOSCHED_KYBER is not set" >> "$DEFCONFIG_FILE"
+          echo "CONFIG_MQ_IOSCHED_SSG=y" >> "$DEFCONFIG_FILE"
+          echo "CONFIG_MQ_IOSCHED_SSG_CGROUP=y" >> "$DEFCONFIG_FILE"
+          echo "CONFIG_MQ_IOSCHED_KYBER=y" >> "$DEFCONFIG_FILE"
 
       - name: 🔒 Patch Kernel of Baseband Guard
         uses: ./.github/workflows/patch-baseband-guard
