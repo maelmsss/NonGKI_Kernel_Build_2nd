@@ -34,7 +34,7 @@ env:
   KERNELSU_BRANCH : ""
 
   KERNELSU_AUTO_GET : "true"
-  KERNELSU_AUTO_FORK : "resukisu" # xxksu, rsuntk , next, resukisu and sukisu
+  KERNELSU_AUTO_FORK : "bakasu" # xxksu, rsuntk , next, resukisu and sukisu
 
   SUSFS_ENABLE : true
   SUSFS_FIXED : true
@@ -69,8 +69,6 @@ env:
 
   HOOK_METHOD: "syscall" # Manual hook method ->  syscall.
 
-  KERNEL_PATCH: "false" # If your kernel version is <= 4.9, you have the option of enabling the patch to patch the kernel_write and kernel_read functions.
-
   KPM_ENABLE: "false" # Anyone devices. 
   KPM_INLINE: "false" # Only use it for SukiSU-Ultra.
   KPM_KPATCH_NEXT: "false" # If u want hook KPatch-Next in build step.
@@ -93,7 +91,7 @@ env:
 jobs:
   build-kernel:
     name: Samsung Note 10 Plus (OneUI A15)
-    runs-on: ubuntu-latest # u can changed to ubuntu 22.04, and need container set ubuntu-latest
+    runs-on: ubuntu-24.04 # u can changed to ubuntu 22.04, and need container set ubuntu-latest
     # container: archlinux/archlinux:latest # if u need use arch linux -> archlinux/archlinux:latest or ubuntu 20.04 -> ubuntu:focal
     env:
       CCACHE_COMPILERCHECK: "%compiler% -dumpmachine; %compiler% -dumpversion"
