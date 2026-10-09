@@ -29,7 +29,7 @@ env:
   KERNELSU_BRANCH : ""
 
   KERNELSU_AUTO_GET : "true"
-  KERNELSU_AUTO_FORK : "resukisu"
+  KERNELSU_AUTO_FORK : "bakasu"
 
   SUSFS_ENABLE : true
   SUSFS_FIXED : true
@@ -63,8 +63,6 @@ env:
   NOMOUNT_ENABLE: "false"
 
   HOOK_METHOD: "syscall"
-
-  KERNEL_PATCH: "false"
 
   KPM_ENABLE: "false"
   KPM_INLINE: "false"
