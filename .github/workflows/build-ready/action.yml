@@ -169,11 +169,11 @@ runs:
             elif [[ "${{ env.KERNELSU_AUTO_FORK }}" == "bakasu" ]]; then
                 KERNELSU_AUTHOR="Baka-SU"
                 KERNELSU_NAME="BakaSU"
-                KERNELSU_ORIGIN_BRANCH="main"
+                KERNELSU_ORIGIN_BRANCH="sync-susfs"
                 if [[ "${{ env.SUSFS_ENABLE }}" == "true" ]]; then
-                    KERNELSU_BRANCH="main"
+                    KERNELSU_BRANCH="sync-susfs"
                 else
-                    KERNELSU_BRANCH="main"
+                    KERNELSU_BRANCH="sync-susfs"
                 fi
 
             else
