@@ -127,37 +127,6 @@ jobs:
       - name: ⚙️ Get necessary tools
         uses: ./.github/workflows/build-ready
           
-      - name: ⚙️ Custom Scheduler Optimizations (Hardcoded & Locked)
-        shell: bash
-        run: |
-            cd $GITHUB_WORKSPACE/device_kernel
-
-            echo "[*] Processing Kconfig settings..."
-            find arch/arm64/configs -type f -name "*defconfig" -exec sh -c '
-                
-                # (Network Scheduler)
-                echo "CONFIG_NET_SCHED=y" >> "{}"
-                echo "CONFIG_NET_SCH_FQ_CODEL=y" >> "{}"
-                echo "CONFIG_DEFAULT_FQ_CODEL=y" >> "{}"
-                echo "CONFIG_NET_SCH_DEFAULT=y" >> "{}"
-                sed -i "/CONFIG_DEFAULT_NET_SCH/d" "{}"
-                echo "CONFIG_DEFAULT_NET_SCH=\"fq_codel\"" >> "{}"
-
-                # (Congestion Control)
-                echo "CONFIG_TCP_CONG_ADVANCED=y" >> "{}"
-                echo "CONFIG_TCP_CONG_CUBIC=y" >> "{}"
-                echo "CONFIG_DEFAULT_CUBIC=y" >> "{}"
-                sed -i "/CONFIG_DEFAULT_TCP_CONG/d" "{}"
-                echo "CONFIG_DEFAULT_TCP_CONG=\"cubic\"" >> "{}"
-            ' \;
-
-            echo "[*] Hardcoding fq_codel into source..."
-            # 1. Replace pfifo_fast with fq_codel in source code
-            sed -i 's/"pfifo_fast"/"fq_codel"/g' net/sched/sch_generic.c
-
-            echo "[+] Optimizations locked into kernel successfully!"
-
-          
       - name: 🛠️ Apply Hotplug Spam Fix
         shell: bash
         run: |
