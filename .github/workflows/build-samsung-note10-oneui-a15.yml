@@ -767,52 +767,36 @@ jobs:
       - name: 🔒 Patch Kernel of Baseband Guard
         uses: ./.github/workflows/patch-baseband-guard
 
-      - name: 🛡️ Inject Fake Access Rules to KernelSU V2
+      - name: 🛡️ Hide fsck_untrusted sys_admin
         shell: python
         run: |
           import os
-          import re
-          
           target = None
           for root, dirs, files in os.walk("."):
-              if "selinux_hide.c" in files:
+              if "selinux_hide.c" in files and "feature" in root:
                   target = os.path.join(root, "selinux_hide.c")
                   break
-          
           if not target:
-              print("[-] ERROR: selinux_hide.c not found!")
-              exit(1)
-              
-          with open(target, "r", encoding="utf-8") as f:
+              raise SystemExit("selinux_hide.c not found")
+          with open(target, encoding="utf-8") as f:
               content = f.read()
-          
-          inject = """
-              /* ===== ADDED STRICT BYPASS ===== */
-              if (strcmp(scon, "u:r:fsck_untrusted:s0") == 0 && strcmp(tcon, "u:r:fsck_untrusted:s0") == 0) {
-                  length = scnprintf(buf, SIMPLE_TRANSACTION_LIMIT, "%x %x %x %x %u %x", 0, 0xffffffff, 0, 0xffffffff, 1, 0);
-                  goto out;
-              }
-              if (strcmp(scon, "u:r:shell:s0") == 0 && strcmp(tcon, "u:r:su:s0") == 0) {
-                  length = scnprintf(buf, SIMPLE_TRANSACTION_LIMIT, "%x %x %x %x %u %x", 0, 0xffffffff, 0, 0xffffffff, 1, 0);
-                  goto out;
-              }
-              if (strcmp(scon, "u:r:adbd:s0") == 0 && strcmp(tcon, "u:r:adbroot:s0") == 0) {
-                  length = scnprintf(buf, SIMPLE_TRANSACTION_LIMIT, "%x %x %x %x %u %x", 0, 0xffffffff, 0, 0xffffffff, 1, 0);
-                  goto out;
-              }
-              /* ================================ */
-          """
-          
-          pattern = re.compile(r'(if\s*\(\s*sscanf\s*\(\s*buf,\s*"%s\s+%s\s+%hu",\s*scon,\s*tcon,\s*&tclass\s*\)\s*!=\s*3\s*\)\s*goto\s*out;)')
-          
-          if pattern.search(content):
-              content = pattern.sub(r'\g<1>\n' + inject, content, count=1)
-              with open(target, "w", encoding="utf-8") as f:
-                  f.write(content)
-              print("[+] V2 Bypass code successfully injected!")
-          else:
-              print("[-] ERROR: sscanf line not found.")
-              exit(1)
+          old = """    // stock reads 1; a loader load_policy may have bumped the backup before we load
+          avd.seqno = 1;
+          length = scnprintf(buf, SIMPLE_TRANSACTION_LIMIT, \"%x %x %x %x %u %x\", avd.allowed, 0xffffffff, avd.auditallow,"""
+          new = """    // stock reads 1; a loader load_policy may have bumped the backup before we load
+          avd.seqno = 1;
+          if (tclass == SECCLASS_CAPABILITY &&
+              strcmp(scon, \"u:r:fsck_untrusted:s0\") == 0 &&
+              strcmp(tcon, \"u:r:fsck_untrusted:s0\") == 0)
+              avd.allowed &= ~(1U << 21);
+          length = scnprintf(buf, SIMPLE_TRANSACTION_LIMIT, \"%x %x %x %x %u %x\", avd.allowed, 0xffffffff, avd.auditallow,"""
+          if old not in content:
+              raise SystemExit("access reply site not found")
+          if content.count(old) != 1:
+              raise SystemExit("access reply site is not unique")
+          with open(target, "w", encoding="utf-8") as f:
+              f.write(content.replace(old, new, 1))
+          print("fsck_untrusted sys_admin bit cleared")
               
       - name: 🚀 Build Process
         uses: ./.github/workflows/build-process
