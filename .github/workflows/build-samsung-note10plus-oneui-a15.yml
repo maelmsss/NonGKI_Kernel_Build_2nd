@@ -481,7 +481,7 @@ jobs:
         uses: ./.github/workflows/patch-baseband-guard
 
       - name: 🛡️ Hide fsck_untrusted sys_admin
-        shell: python3
+        shell: python
         run: |
           import os
           target = None
