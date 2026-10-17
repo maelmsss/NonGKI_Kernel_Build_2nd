@@ -481,7 +481,7 @@ jobs:
         uses: ./.github/workflows/patch-baseband-guard
 
       - name: 🛡️ Hide fsck_untrusted sys_admin
-        shell: python
+        shell: python3
         run: |
           import os
           target = None
@@ -493,16 +493,20 @@ jobs:
               raise SystemExit("selinux_hide.c not found")
           with open(target, encoding="utf-8") as f:
               content = f.read()
-          old = """    // stock reads 1; a loader load_policy may have bumped the backup before we load
-          avd.seqno = 1;
-          length = scnprintf(buf, SIMPLE_TRANSACTION_LIMIT, \"%x %x %x %x %u %x\", avd.allowed, 0xffffffff, avd.auditallow,"""
-          new = """    // stock reads 1; a loader load_policy may have bumped the backup before we load
-          avd.seqno = 1;
-          if (tclass == SECCLASS_CAPABILITY &&
-              strcmp(scon, \"u:r:fsck_untrusted:s0\") == 0 &&
-              strcmp(tcon, \"u:r:fsck_untrusted:s0\") == 0)
-              avd.allowed &= ~(1U << 21);
-          length = scnprintf(buf, SIMPLE_TRANSACTION_LIMIT, \"%x %x %x %x %u %x\", avd.allowed, 0xffffffff, avd.auditallow,"""
+          old = (
+              "    // stock reads 1; a loader load_policy may have bumped the backup before we load\n"
+              "    avd.seqno = 1;\n"
+              "    length = scnprintf(buf, SIMPLE_TRANSACTION_LIMIT, \"%x %x %x %x %u %x\", avd.allowed, 0xffffffff, avd.auditallow,"
+          )
+          new = (
+              "    // stock reads 1; a loader load_policy may have bumped the backup before we load\n"
+              "    avd.seqno = 1;\n"
+              "    if (tclass == SECCLASS_CAPABILITY &&\n"
+              "        strcmp(scon, \"u:r:fsck_untrusted:s0\") == 0 &&\n"
+              "        strcmp(tcon, \"u:r:fsck_untrusted:s0\") == 0)\n"
+              "        avd.allowed &= ~(1U << 21);\n"
+              "    length = scnprintf(buf, SIMPLE_TRANSACTION_LIMIT, \"%x %x %x %x %u %x\", avd.allowed, 0xffffffff, avd.auditallow,"
+          )
           if old not in content:
               raise SystemExit("access reply site not found")
           if content.count(old) != 1:
