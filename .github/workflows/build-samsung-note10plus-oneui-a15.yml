@@ -480,7 +480,7 @@ jobs:
       - name: 🔒 Patch Kernel of Baseband Guard
         uses: ./.github/workflows/patch-baseband-guard
 
-      - name: 🛡️ Hide fsck_untrusted sys_admin
+      - name: Hide fsck_untrusted sys_admin
         shell: python
         run: |
           import os
@@ -493,22 +493,20 @@ jobs:
               raise SystemExit("selinux_hide.c not found")
           with open(target, encoding="utf-8") as f:
               content = f.read()
-          old = """    // stock reads 1; a loader load_policy may have bumped the backup before we load
-          avd.seqno = 1;
-          length = scnprintf(buf, SIMPLE_TRANSACTION_LIMIT, \"%x %x %x %x %u %x\", avd.allowed, 0xffffffff, avd.auditallow,"""
-          new = """    // stock reads 1; a loader load_policy may have bumped the backup before we load
-          avd.seqno = 1;
-          if (tclass == SECCLASS_CAPABILITY &&
-              strcmp(scon, \"u:r:fsck_untrusted:s0\") == 0 &&
-              strcmp(tcon, \"u:r:fsck_untrusted:s0\") == 0)
-              avd.allowed &= ~(1U << 21);
-          length = scnprintf(buf, SIMPLE_TRANSACTION_LIMIT, \"%x %x %x %x %u %x\", avd.allowed, 0xffffffff, avd.auditallow,"""
-          if old not in content:
-              raise SystemExit("access reply site not found")
-          if content.count(old) != 1:
-              raise SystemExit("access reply site is not unique")
+          anchor = "    avd.seqno = 1;\n"
+          extra = (
+              "    if (tclass == SECCLASS_CAPABILITY &&\n"
+              "        strcmp(scon, \"u:r:fsck_untrusted:s0\") == 0 &&\n"
+              "        strcmp(tcon, \"u:r:fsck_untrusted:s0\") == 0)\n"
+              "        avd.allowed &= ~(1U << 21);\n"
+          )
+          if content.count(anchor) != 1:
+              raise SystemExit("seqno anchor count %s" % content.count(anchor))
+          if "fsck_untrusted" in content:
+              raise SystemExit("already patched")
+          content = content.replace(anchor, anchor + extra, 1)
           with open(target, "w", encoding="utf-8") as f:
-              f.write(content.replace(old, new, 1))
+              f.write(content)
           print("fsck_untrusted sys_admin bit cleared")
           
       - name: 🚀 Build Process
