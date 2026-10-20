@@ -34,7 +34,7 @@ env:
   KERNELSU_BRANCH : ""
 
   KERNELSU_AUTO_GET : "true"
-  KERNELSU_AUTO_FORK : "sukisu" # xxksu, rsuntk , next, resukisu and sukisu
+  KERNELSU_AUTO_FORK : "bakasu" # xxksu, rsuntk , next, resukisu and sukisu
 
   SUSFS_ENABLE : true
   SUSFS_FIXED : true
@@ -481,24 +481,18 @@ jobs:
         uses: ./.github/workflows/patch-baseband-guard
 
       - name: 🛡️ Hide fsck_untrusted sys_admin
-        shell: python
+        shell: python3
         run: |
           import os
-          import sys
-
           target = None
           for root, dirs, files in os.walk("."):
               if "selinux_hide.c" in files and "feature" in root:
                   target = os.path.join(root, "selinux_hide.c")
                   break
-
           if not target:
-              print("selinux_hide.c not found, skipping")
-              sys.exit(0)
-
+              raise SystemExit("selinux_hide.c not found")
           with open(target, encoding="utf-8") as f:
               content = f.read()
-
           old = (
               "    // stock reads 1; a loader load_policy may have bumped the backup before we load\n"
               "    avd.seqno = 1;\n"
@@ -513,19 +507,14 @@ jobs:
               "        avd.allowed &= ~(1U << 21);\n"
               "    length = scnprintf(buf, SIMPLE_TRANSACTION_LIMIT, \"%x %x %x %x %u %x\", avd.allowed, 0xffffffff, avd.auditallow,"
           )
-
           if old not in content:
-              print("access reply site not found (SukiSU-Ultra style selinux_hide), skipping")
-              sys.exit(0)
-
+              raise SystemExit("access reply site not found")
           if content.count(old) != 1:
-              print("access reply site is not unique, skipping")
-              sys.exit(0)
-
+              raise SystemExit("access reply site is not unique")
           with open(target, "w", encoding="utf-8") as f:
               f.write(content.replace(old, new, 1))
           print("fsck_untrusted sys_admin bit cleared")
-
+          
       - name: 🚀 Build Process
         uses: ./.github/workflows/build-process
           
