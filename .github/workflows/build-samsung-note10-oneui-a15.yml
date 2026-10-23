@@ -147,7 +147,7 @@ jobs:
     env:
       DEVICE_NAME: ${{ matrix.name }}
       DEVICE_CODENAME: ${{ matrix.model }}
-      MERGE_CONFIG_FILES: "${{ matrix.model }}.config,recovery.config"
+      MERGE_CONFIG_FILES: "${{ matrix.model }}.config"
       CCACHE_COMPILERCHECK: "%compiler% -dumpmachine; %compiler% -dumpversion"
       CCACHE_NOHASHDIR: "true"
       CCACHE_HARDLINK: "true"
