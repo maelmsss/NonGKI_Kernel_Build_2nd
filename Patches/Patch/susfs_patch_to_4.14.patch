@@ -4581,3 +4581,72 @@ diff --git a/block/ioprio.c b/block/ioprio.c
  	kuid_t uid;
  	int ret = -ESRCH;
  	int tmpio;
+diff --git a/kernel/sys.c b/kernel/sys.c
+--- a/kernel/sys.c
++++ b/kernel/sys.c
+@@ -1,6 +1,10 @@
+ #include <linux/export.h>
+ #include <linux/mm.h>
++#ifdef CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER
++extern bool susfs_is_priority_uid_filtered(uid_t uid);
++#endif
+ #include <linux/utsname.h>
+ #include <linux/mman.h>
+ #include <linux/reboot.h>
+@@ -XXXX,10 +XXXX,16 @@ SYSCALL_DEFINE3(setpriority, int, which, int, who, int, niceval)
+ 	struct task_struct *g, *p;
+ 	struct user_struct *user;
+ 	const struct cred *cred = current_cred();
++#ifdef CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER
++	/* Hide filtered UIDs from setpriority (return -ESRCH like non-existent) */
++	if (who && current_uid().val >= 10000 && susfs_is_priority_uid_filtered(who % 100000))
++		return -ESRCH;
++#endif
+ 	int error = -EINVAL;
+ 	struct pid *pgrp;
+ 	kuid_t uid;
+@@ -YYYY,10 +YYYY,16 @@ SYSCALL_DEFINE2(getpriority, int, which, int, who)
+ 	struct task_struct *g, *p;
+ 	struct user_struct *user;
+ 	const struct cred *cred = current_cred();
++#ifdef CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER
++	/* Hide filtered UIDs from getpriority */
++	if (who && current_uid().val >= 10000 && susfs_is_priority_uid_filtered(who % 100000))
++		return -ESRCH;
++#endif
+ 	long niceval, retval = -ESRCH;
+ 	struct pid *pgrp;
+ 	kuid_t uid;
+
+diff --git a/block/ioprio.c b/block/ioprio.c
+--- a/block/ioprio.c
++++ b/block/ioprio.c
+@@ -1,6 +1,10 @@
+ #include <linux/kernel.h>
+ #include <linux/ioprio.h>
++#ifdef CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER
++extern bool susfs_is_priority_uid_filtered(uid_t uid);
++#endif
+ #include <linux/cred.h>
+ #include <linux/blkdev.h>
+@@ -AAAA,10 +AAAA,16 @@ SYSCALL_DEFINE3(ioprio_set, int, which, int, who, int, ioprio)
+ 	struct task_struct *p, *g;
+ 	struct user_struct *user;
+ 	struct pid *pgrp;
++#ifdef CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER
++	if (who && current_uid().val >= 10000 && susfs_is_priority_uid_filtered(who % 100000))
++		return -ESRCH;
++#endif
+ 	kuid_t uid;
+ 	int ret;
+@@ -BBBB,10 +BBBB,16 @@ SYSCALL_DEFINE2(ioprio_get, int, which, int, who)
+ 	struct task_struct *g, *p;
+ 	struct user_struct *user;
+ 	struct pid *pgrp;
++#ifdef CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER
++	if (who && current_uid().val >= 10000 && susfs_is_priority_uid_filtered(who % 100000))
++		return -ESRCH;
++#endif
+ 	kuid_t uid;
+ 	int ret = -ESRCH;
+ 	int tmpio;
