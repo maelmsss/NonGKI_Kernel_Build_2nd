@@ -481,35 +481,6 @@ jobs:
           
       - name: 🔒 Patch Kernel of Baseband Guard
         uses: ./.github/workflows/patch-baseband-guard
-
-      - name: Hide fsck_untrusted sys_admin
-        shell: python
-        run: |
-          import os
-          target = None
-          for root, dirs, files in os.walk("."):
-              if "selinux_hide.c" in files and "feature" in root:
-                  target = os.path.join(root, "selinux_hide.c")
-                  break
-          if not target:
-              raise SystemExit("selinux_hide.c not found")
-          with open(target, encoding="utf-8") as f:
-              content = f.read()
-          anchor = "    avd.seqno = 1;\n"
-          extra = (
-              "    if (tclass == SECCLASS_CAPABILITY &&\n"
-              "        strcmp(scon, \"u:r:fsck_untrusted:s0\") == 0 &&\n"
-              "        strcmp(tcon, \"u:r:fsck_untrusted:s0\") == 0)\n"
-              "        avd.allowed &= ~(1U << 21);\n"
-          )
-          if content.count(anchor) != 1:
-              raise SystemExit("seqno anchor count %s" % content.count(anchor))
-          if "fsck_untrusted" in content:
-              raise SystemExit("already patched")
-          content = content.replace(anchor, anchor + extra, 1)
-          with open(target, "w", encoding="utf-8") as f:
-              f.write(content)
-          print("fsck_untrusted sys_admin bit cleared")
           
       - name: 🚀 Build Process
         uses: ./.github/workflows/build-process
