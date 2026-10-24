@@ -67,7 +67,7 @@ env:
   DROIDSPACES_ENABLE: "false" # if u need Droidspaces or LXC/Docker.
   NOMOUNT_ENABLE: "false" # if u need NoMount.
 
-  HOOK_METHOD: "inline" # Manual hook method ->  syscall.
+  HOOK_METHOD: "syscall" # Manual hook method ->  syscall.
 
   KPM_ENABLE: "false" # Anyone devices. 
   KPM_INLINE: "false" # Only use it for SukiSU-Ultra.
