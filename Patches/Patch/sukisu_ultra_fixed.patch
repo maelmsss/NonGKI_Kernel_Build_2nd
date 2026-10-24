@@ -1,6 +1,5 @@
-diff --git a/drivers/kernelsu/extension/cpu_spoof.c b/drivers/kernelsu/extension/cpu_spoof.c
---- a/drivers/kernelsu/extension/cpu_spoof.c
-+++ b/drivers/kernelsu/extension/cpu_spoof.c
+--- a/extension/cpu_spoof.c
++++ b/extension/cpu_spoof.c
 @@ -26,8 +26,10 @@
  #include <asm/cpu.h>
  #include <asm/cputype.h>
@@ -12,7 +11,7 @@ diff --git a/drivers/kernelsu/extension/cpu_spoof.c b/drivers/kernelsu/extension
  
  #ifndef MIDR_PARTNUM_SHIFT
  #define MIDR_PARTNUM_SHIFT 4
-@@ -124,6 +126,7 @@
+@@ -124,6 +126,7 @@ static int set_spoof_cpu(const struct ksu_set_spoof_cpu_cmd *cmd)
              ++missing;
          }
  
@@ -20,7 +19,7 @@ diff --git a/drivers/kernelsu/extension/cpu_spoof.c b/drivers/kernelsu/extension
          {
              unsigned int part = MIDR_PARTNUM(cmd->midr);
              if (part != ARM_CPU_PART_NEOVERSE_N1 &&
-@@ -205,6 +208,7 @@
+@@ -205,6 +208,7 @@ static int set_spoof_cpu(const struct ksu_set_spoof_cpu_cmd *cmd)
                  }
              }
          }
@@ -28,9 +27,8 @@ diff --git a/drivers/kernelsu/extension/cpu_spoof.c b/drivers/kernelsu/extension
      }
  #endif
  
-diff --git a/drivers/kernelsu/kernel_includes.h b/drivers/kernelsu/kernel_includes.h
---- a/drivers/kernelsu/kernel_includes.h
-+++ b/drivers/kernelsu/kernel_includes.h
+--- a/kernel_includes.h
++++ b/kernel_includes.h
 @@ -32,11 +32,11 @@
  #include <linux/init.h>
  #include <linux/init_task.h>
@@ -64,37 +62,3 @@ diff --git a/drivers/kernelsu/kernel_includes.h b/drivers/kernelsu/kernel_includ
  #elif LINUX_VERSION_CODE >= KERNEL_VERSION(3, 7, 0)
  #include <uapi/linux/input.h>
  #endif
-diff --git a/include/linux/ioctl.h b/include/linux/ioctl.h
-new file mode 100644
---- /dev/null
-+++ b/include/linux/ioctl.h
-@@ -0,0 +1,6 @@
-+#ifndef _LINUX_IOCTL_H
-+#define _LINUX_IOCTL_H
-+
-+#include <uapi/linux/ioctl.h>
-+
-+#endif
-diff --git a/include/linux/limits.h b/include/linux/limits.h
-new file mode 100644
---- /dev/null
-+++ b/include/linux/limits.h
-@@ -0,0 +1,7 @@
-+#ifndef _LINUX_LIMITS_H
-+#define _LINUX_LIMITS_H
-+
-+#include <uapi/linux/limits.h>
-+#include <linux/types.h>
-+
-+#endif
-diff --git a/include/linux/input-event-codes.h b/include/linux/input-event-codes.h
-new file mode 100644
---- /dev/null
-+++ b/include/linux/input-event-codes.h
-@@ -0,0 +1,6 @@
-+#ifndef _LINUX_INPUT_EVENT_CODES_H
-+#define _LINUX_INPUT_EVENT_CODES_H
-+
-+#include <uapi/linux/input-event-codes.h>
-+
-+#endif
