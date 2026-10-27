@@ -107,15 +107,6 @@ jobs:
       - name: ⏰ Checkout repository
         uses: actions/checkout@v6
 
-      # ========================================
-
-      - name: 🔍 List Patches directory
-        shell: bash
-        run: |
-          ls -la $GITHUB_WORKSPACE/Patches/ || echo "[-] Patches not found in Workspace (already backed up)"
-          echo "---"
-          find /tmp/Patches_Backup -maxdepth 2 -type f
-
       - name: ⌛️ Compilation environment preparation
         uses: ./.github/workflows/build-env
 
