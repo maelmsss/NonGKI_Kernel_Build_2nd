@@ -248,9 +248,10 @@ index 80b743c..c27fde5 100644
  		path.dentry = lookup_slow(&nd->last, nd->path.dentry,
  					  nd->flags);
  		if (IS_ERR(path.dentry))
-@@ -2197,6 +2316,17 @@ static int link_path_walk(const char *name, struct nameidata *nd)
- 		if (err)
- 			return err;
+@@ -2222,7 +2222,17 @@ static int link_path_walk(const char *name, struct nameidata *nd)
+ 	for(;;) {
+ 		u64 hash_len;
+ 		int type;
  
 +#ifdef CONFIG_KSU_SUSFS_SUS_PATH
 +		{
@@ -262,10 +263,9 @@ index 80b743c..c27fde5 100644
 +			}
 +		}
 +#endif
-+
- 		hash_len = hash_name(nd->path.dentry, name);
- 
- 		type = LAST_NORM;
+ 		err = may_lookup(nd);
+ 		if (err)
+ 			return err;
 @@ -2387,6 +2517,9 @@ static inline int lookup_last(struct nameidata *nd)
  {
  	if (nd->last_type == LAST_NORM && nd->last.name[nd->last.len])
@@ -3383,8 +3383,11 @@ index 0000000..7dca01d
 +	size_t copied_size = 0;
 +
 +	if (!info) {
-+		info->err = -ENOMEM;
-+		goto out_copy_to_user;
++		int err = -ENOMEM;
++		if (copy_to_user(&((struct st_susfs_enabled_features __user *)*user_info)->err, &err, sizeof(err)))
++			err = -EFAULT;
++		SUSFS_LOGI("CMD_SUSFS_SHOW_ENABLED_FEATURES -> ret: %d\n", err);
++		return;
 +	}
 +
 +	if (copy_from_user(info, (struct st_susfs_enabled_features __user*)*user_info, sizeof(struct st_susfs_enabled_features))) {
