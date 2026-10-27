@@ -470,8 +470,8 @@ jobs:
         shell: bash
         run: |
           cd "$GITHUB_WORKSPACE/device_kernel/drivers/kernelsu"
-          patch -p1 --forward < "$GITHUB_WORKSPACE/Patches/selinux_hide_timing.patch"
-
+          patch -p1 --forward < /tmp/Patches/selinux_hide_timing.patch
+          
       - name: Hide fsck_untrusted sys_admin
         shell: python
         run: |
