@@ -3921,8 +3921,10 @@ index 0000000..7dca01d
 +		is_uid_filter_set_before = true;
 +	mutex_unlock(&susfs_mutex_lock_priority_uid_filter);
 +
-+	if (old_bitmap)
++	if (old_bitmap) {
++		synchronize_rcu();
 +		kfree_rcu(old_bitmap, rcu);
++	}
 +
 +	SUSFS_LOGI("the priority uid filter is set\n");
 +	err = 0;
@@ -3996,8 +3998,10 @@ index 0000000..7dca01d
 +	new_bitmap = NULL;
 +	mutex_unlock(&susfs_mutex_lock_priority_uid_filter);
 +
-+	if (old_bitmap)
++	if (old_bitmap) {
++		synchronize_rcu();
 +		kfree_rcu(old_bitmap, rcu);
++	}
 +
 +	SUSFS_LOGI("the uids of the priority uid filter are resolved again\n");
 +
@@ -4822,7 +4826,7 @@ diff --git a/drivers/kernelsu/supercall/dispatch.c b/drivers/kernelsu/supercall/
 diff --git a/drivers/kernelsu/manager/pkg_observer.c b/drivers/kernelsu/manager/pkg_observer.c
 --- a/drivers/kernelsu/manager/pkg_observer.c
 +++ b/drivers/kernelsu/manager/pkg_observer.c
-@@ -6,6 +6,7 @@
+@@ -8,6 +8,7 @@
  #include <linux/rculist.h>
  #include <linux/task_work.h>
  #include <linux/version.h>
@@ -4830,16 +4834,23 @@ diff --git a/drivers/kernelsu/manager/pkg_observer.c b/drivers/kernelsu/manager/
  #include "klog.h" // IWYU pragma: keep
  #include "manager/throne_tracker.h"
  
-@@ -40,6 +41,8 @@ static void ksu_defer_track_throne(void)
- {
-     struct callback_head *cb;
- 
-+    // Renew the getpriority uid bitmap filter
+@@ -30,6 +31,8 @@
+     if (current->flags & PF_EXITING)
+         return;
+     track_throne(TRACK_THRONE_FORCE_SYNCHRONOUS);
++    /* After track_throne, so the worker is not blocked on fsnotify locks. */
 +    susfs_parse_priority_app_strings();
-     if (!(current->flags & PF_KTHREAD)) {
-         cb = kzalloc(sizeof(*cb), GFP_KERNEL);
-         if (cb) {
-
+ }
+ 
+ // Never scan from the fsnotify handler: fsnotify_mark_srcu and the rename's dir
+@@ -52,6 +55,7 @@
+     }
+     pr_warn("defer track_throne failed, run it inline\n");
+     track_throne(TRACK_THRONE_FORCE_SYNCHRONOUS);
++    susfs_parse_priority_app_strings();
+ }
+ 
+ static int ksu_handle_inode_event(struct fsnotify_mark *mark, u32 mask, struct inode *inode, struct inode *dir,
 diff --git a/security/selinux/hooks.c b/security/selinux/hooks.c
 --- a/security/selinux/hooks.c
 +++ b/security/selinux/hooks.c
