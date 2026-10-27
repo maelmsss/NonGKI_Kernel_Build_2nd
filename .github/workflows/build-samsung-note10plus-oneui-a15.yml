@@ -107,13 +107,6 @@ jobs:
       - name: ⏰ Checkout repository
         uses: actions/checkout@v6
 
-      - name: 🛡️ Backup Patches Directory
-        shell: bash
-        run: |
-          echo "[*] Backing up Patches directory to /tmp/Patches_Backup..."
-          cp -r $GITHUB_WORKSPACE/Patches /tmp/Patches_Backup
-          echo "[+] Backup complete. Contents of /tmp/Patches_Backup:"
-          ls -la /tmp/Patches_Backup
       # ========================================
 
       - name: 🔍 List Patches directory
@@ -481,6 +474,12 @@ jobs:
           
       - name: 🔒 Patch Kernel of Baseband Guard
         uses: ./.github/workflows/patch-baseband-guard
+
+      - name: selinux_hide timing fix
+        shell: bash
+        run: |
+          cd "$GITHUB_WORKSPACE/device_kernel/drivers/kernelsu"
+          patch -p1 --forward < "$GITHUB_WORKSPACE/Patches/selinux_hide_timing.patch"
 
       - name: Hide fsck_untrusted sys_admin
         shell: python
