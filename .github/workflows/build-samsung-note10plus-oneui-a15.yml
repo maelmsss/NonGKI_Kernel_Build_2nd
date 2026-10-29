@@ -474,6 +474,7 @@ jobs:
           
       - name: Hide fsck_untrusted sys_admin
         shell: python
+        working-directory: ${{ github.workspace }}/device_kernel
         run: |
           import os
           target = None
