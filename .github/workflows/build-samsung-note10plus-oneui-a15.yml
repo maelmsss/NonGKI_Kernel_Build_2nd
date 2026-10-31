@@ -465,12 +465,6 @@ jobs:
           
       - name: 🔒 Patch Kernel of Baseband Guard
         uses: ./.github/workflows/patch-baseband-guard
-
-      - name: selinux_hide timing fix
-        shell: bash
-        run: |
-          cd "$GITHUB_WORKSPACE/device_kernel/drivers/kernelsu"
-          patch -p1 --forward < /tmp/Patches/selinux_hide_timing.patch
           
       - name: Hide fsck_untrusted sys_admin
         shell: python
