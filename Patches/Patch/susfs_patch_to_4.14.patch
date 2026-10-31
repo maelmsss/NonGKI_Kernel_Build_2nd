@@ -4812,48 +4812,6 @@ index 1111111..2222222 100644
  
  			if (!user)
  				break;
-diff --git a/drivers/kernelsu/supercall/dispatch.c b/drivers/kernelsu/supercall/dispatch.c
---- a/drivers/kernelsu/supercall/dispatch.c
-+++ b/drivers/kernelsu/supercall/dispatch.c
-@@ -1167,6 +1167,10 @@ int ksu_handle_susfs_cmd(unsigned int cmd, void __user **arg)
-         return 0;
-     }
- #endif // #ifdef CONFIG_KSU_SUSFS_SUS_MAP
-+    case CMD_SUSFS_SET_PRIORITY_UID_FILTER: {
-+        susfs_set_priority_uid_filter(arg);
-+        return 0;
-+    }
-     case CMD_SUSFS_ENABLE_AVC_LOG_SPOOFING: {
-         susfs_set_avc_log_spoofing(arg);
-         return 0;
-diff --git a/drivers/kernelsu/manager/pkg_observer.c b/drivers/kernelsu/manager/pkg_observer.c
---- a/drivers/kernelsu/manager/pkg_observer.c
-+++ b/drivers/kernelsu/manager/pkg_observer.c
-@@ -8,6 +8,7 @@
- #include <linux/rculist.h>
- #include <linux/task_work.h>
- #include <linux/version.h>
-+#include <linux/susfs.h>
- #include "klog.h" // IWYU pragma: keep
- #include "manager/throne_tracker.h"
- 
-@@ -30,6 +31,8 @@
-     if (current->flags & PF_EXITING)
-         return;
-     track_throne(TRACK_THRONE_FORCE_SYNCHRONOUS);
-+    /* After track_throne, so the worker is not blocked on fsnotify locks. */
-+    susfs_parse_priority_app_strings();
- }
- 
- // Never scan from the fsnotify handler: fsnotify_mark_srcu and the rename's dir
-@@ -52,6 +55,7 @@
-     }
-     pr_warn("defer track_throne failed, run it inline\n");
-     track_throne(TRACK_THRONE_FORCE_SYNCHRONOUS);
-+    susfs_parse_priority_app_strings();
- }
- 
- static int ksu_handle_inode_event(struct fsnotify_mark *mark, u32 mask, struct inode *inode, struct inode *dir,
 diff --git a/security/selinux/hooks.c b/security/selinux/hooks.c
 --- a/security/selinux/hooks.c
 +++ b/security/selinux/hooks.c
