@@ -32,7 +32,6 @@ env:
   KERNELSU_AUTO_FORK : "bakasu"
 
   SUSFS_ENABLE : true
-  SUSFS_FIXED : true
   
   AK3_SOURCE : "https://github.com/osm0sis/AnyKernel3.git"
   AK3_BRANCH : "master"
@@ -58,15 +57,8 @@ env:
   SUSFS_FOLDER_FIXED: "note10_plus_exyons9850"
   SUSFS_PATCH_FIXED: "susfs_fixed"
 
-  REKERNEL_ENABLE: "false"
-  DROIDSPACES_ENABLE: "false"
-  NOMOUNT_ENABLE: "false"
-
   HOOK_METHOD: "syscall"
 
-  KPM_ENABLE: "false"
-  KPM_INLINE: "false"
-  KPM_KPATCH_NEXT: "false"
   KPM_PATCH_SOURCE: "https://raw.githubusercontent.com/ShirkNeko/SukiSU_patch/refs/heads/main/kpm/patch_linux"
 
   BASEBAND_GUARD_ENABLE: "true"
@@ -160,22 +152,6 @@ jobs:
     steps:
       - name: ⏰ Checkout repository
         uses: actions/checkout@v6
-
-      - name: 🛡️ Backup Patches Directory
-        shell: bash
-        run: |
-          echo "[*] Backing up Patches directory to /tmp/Patches_Backup..."
-          cp -r $GITHUB_WORKSPACE/Patches /tmp/Patches_Backup
-          echo "[+] Backup complete. Contents of /tmp/Patches_Backup:"
-          ls -la /tmp/Patches_Backup
-      # ========================================
-
-      - name: 🔍 List Patches directory
-        shell: bash
-        run: |
-          ls -la $GITHUB_WORKSPACE/Patches/ || echo "[-] Patches not found in Workspace (already backed up)"
-          echo "---"
-          find /tmp/Patches_Backup -maxdepth 2 -type f
 
       - name: ⌛️ Compilation environment preparation
         uses: ./.github/workflows/build-env
@@ -537,6 +513,7 @@ jobs:
 
       - name: Hide fsck_untrusted sys_admin
         shell: python
+        working-directory: ${{ github.workspace }}/device_kernel
         run: |
           import os
           target = None
