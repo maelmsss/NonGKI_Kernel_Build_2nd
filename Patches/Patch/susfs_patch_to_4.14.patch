@@ -5201,7 +5201,19 @@ diff --git a/security/selinux/selinuxfs.c b/security/selinux/selinuxfs.c
 diff --git a/security/selinux/ss/services.c b/security/selinux/ss/services.c
 --- a/security/selinux/ss/services.c
 +++ b/security/selinux/ss/services.c
-@@ -1163,6 +1163,10 @@
+@@ -76,6 +76,11 @@
+ #include "ebitmap.h"
+ #include "audit.h"
++#ifdef CONFIG_KSU_SUSFS
++extern bool susfs_is_sus_type_rcu(u32 type_value);
++extern void susfs_spoof_avd_allowed_rcu(u32 s_type, u32 t_type, u32 c_type, u32 *avd_allowed);
++extern bool susfs_is_current_ksu_domain(void);
++#endif
+ 
+ /* Policy capability names */
+ const char *selinux_policycap_names[__POLICYDB_CAPABILITY_MAX] = {
+ 	"network_peer_controls",
+@@ -1163,6 +1168,10 @@
  	}
  	context_struct_compute_av(policydb, scontext, tcontext, tclass, avd,
  				  xperms);
@@ -5212,7 +5224,7 @@ diff --git a/security/selinux/ss/services.c b/security/selinux/ss/services.c
  	map_decision(&state->ss->map, orig_tclass, avd,
  		     policydb->allow_unknown);
  out:
-@@ -1217,6 +1221,10 @@
+@@ -1217,6 +1226,10 @@
  
  	context_struct_compute_av(policydb, scontext, tcontext, tclass, avd,
  				  NULL);
@@ -5223,18 +5235,6 @@ diff --git a/security/selinux/ss/services.c b/security/selinux/ss/services.c
   out:
  	read_unlock(&state->ss->policy_rwlock);
  	return;
-@@ -1392,6 +1400,11 @@
- /*
-  * Caveat:  Mutates scontext.
-  */
-+#ifdef CONFIG_KSU_SUSFS
-+extern bool susfs_is_sus_type_rcu(u32 type_value);
-+extern void susfs_spoof_avd_allowed_rcu(u32 s_type, u32 t_type, u32 c_type, u32 *avd_allowed);
-+extern bool susfs_is_current_ksu_domain(void);
-+#endif
- static int string_to_context_struct(struct policydb *pol,
- 				    struct sidtab *sidtabp,
- 				    char *scontext,
 @@ -1453,6 +1466,10 @@
  	if (!typdatum || typdatum->attribute)
  		goto out;
