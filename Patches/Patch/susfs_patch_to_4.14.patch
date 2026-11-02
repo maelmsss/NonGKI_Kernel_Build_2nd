@@ -2137,7 +2137,7 @@ new file mode 100644
 index 0000000..7dca01d
 --- /dev/null
 +++ b/fs/susfs.c
-@@ -0,0 +1,1996 @@
+@@ -0,0 +1,2006 @@
 +#include <linux/version.h>
 +#include <linux/cred.h>
 +#include <linux/fs.h>
@@ -4054,8 +4054,18 @@ index 0000000..7dca01d
 +		goto out_restore_creds;
 +
 +	/*
-+	 * The old bitmap is zeroed and the newly resolved uids are mapped into
-+	 * the new one, which is then published to the readers.
++	 * packages.list is replaced in place. A refresh can observe the empty
++	 * file and resolve nothing. Publishing that would drop the filter until
++	 * the next boot, so keep the bitmap that is already in use.
++	 */
++	if (!bitmap_weight(new_bitmap->bits, SUSFS_PRIORITY_UID_FILTER_UID_NUM)) {
++		SUSFS_LOGE("priority uid refresh resolved nothing, keeping the current filter\n");
++		goto out_restore_creds;
++	}
++
++	/*
++	 * Publish the newly resolved uids. Readers keep using the old bitmap
++	 * until this assignment.
 +	 */
 +	mutex_lock(&susfs_mutex_lock_priority_uid_filter);
 +	old_bitmap = rcu_dereference_protected(priority_uid_filter_bitmap, lockdep_is_held(&susfs_mutex_lock_priority_uid_filter));
