@@ -60,9 +60,6 @@ env:
   PATCHES_SOURCE: "JackA1ltman/NonGKI_Kernel_Patches" # [your_name]/[your_patch] -> gooder123/NonGKI_Patcher
   PATCHES_BRANCH: "samsung_kernel" # [your_branch] -> main
 
-  SUSFS_FOLDER_FIXED: "note10_plus_exyons9850" # Fill in your patch prefix directory here. Leave it blank if there isn't one. -> your_folder
-  SUSFS_PATCH_FIXED: "" # Fill in your patches here. If there are multiple patches, please separate them with a comma. Leave it blank if there isn't one. -> patch1,patch2
-
   REKERNEL_ENABLE: "false" # if u need Re:Kernel.
   DROIDSPACES_ENABLE: "false" # if u need Droidspaces or LXC/Docker.
   NOMOUNT_ENABLE: "false" # if u need NoMount.
@@ -427,7 +424,6 @@ jobs:
           test -f security/vpnhide/core.c
           echo "VPNHide + UDP_SEGMENT ready"
 
-    
       - name: 🧩 Patch Kernel of NoMount
         shell: bash
         run: |
