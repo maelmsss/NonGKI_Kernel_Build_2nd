@@ -2137,7 +2137,7 @@ new file mode 100644
 index 0000000..7dca01d
 --- /dev/null
 +++ b/fs/susfs.c
-@@ -0,0 +1,2036 @@
+@@ -0,0 +1,2032 @@
 +#include <linux/version.h>
 +#include <linux/cred.h>
 +#include <linux/fs.h>
@@ -3694,6 +3694,48 @@ index 0000000..7dca01d
 +#endif // #ifdef CONFIG_KSU_SUSFS_SUS_PATH
 +}
 +
++/*
++ * Switches only the selinux domain of the current process to KernelSU.
++ * The uid and capabilities stay as they are. The returned credentials have
++ * to be restored with susfs_restore_creds().
++ * Returns the original credentials on success, NULL on failure.
++ */
++static struct cred *susfs_switch_to_ksu_domain(void) {
++	struct cred *orig_cred = NULL;
++	struct cred *cred = NULL;
++
++	orig_cred = prepare_creds();
++	if (!orig_cred) {
++		SUSFS_LOGE("failed to prepare creds!\n");
++		return NULL;
++	}
++
++	cred = prepare_creds();
++	if (!cred) {
++		SUSFS_LOGE("failed to prepare creds!\n");
++		abort_creds(orig_cred);
++		return NULL;
++	}
++
++	setup_selinux("u:r:ksu:s0", cred);
++	commit_creds(cred);
++
++	if (!susfs_is_current_ksu_domain()) {
++		SUSFS_LOGE("domain is not ksu, restoring the original creds\n");
++		commit_creds(orig_cred);
++		return NULL;
++	}
++
++	return orig_cred;
++}
++
++static void susfs_restore_creds(struct cred *orig_cred) {
++	if (!orig_cred)
++		return;
++
++	commit_creds(orig_cred);
++}
++
 +/* priority uid filter */
 +struct susfs_priority_uid_filter_bitmap {
 +	struct rcu_head			rcu;
@@ -3739,18 +3781,25 @@ index 0000000..7dca01d
 +}
 +
 +/*
-+ * Reads /data/system/packages.list once.
-+ * A rewrite shows up as an empty file, a short read, or a record that does
-+ * not end in a newline. Those are not a real package list.
++ * Resolves the uid of the given app package name from /data/system/packages.list.
++ * Returns 0 on success, a negative errno on failure.
 + */
-+static int susfs_read_packages_list_once(char **out) {
++static int susfs_resolve_priority_app_uid(const char *app_name, uid_t *uid) {
 +	struct file *fp;
 +	char *buf = NULL;
++	char *line, *tmp, *nl;
++	char *pkg_name, *uid_str;
 +	loff_t pos = 0;
-+	size_t size, size_after;
-+	int ret;
++	size_t size;
++	unsigned long val;
++	int ret = -ENOENT;
 +
-+	*out = NULL;
++	if (!app_name || !*app_name || !uid)
++		return -EINVAL;
++
++	if (!susfs_is_valid_app_name(app_name))
++		return -EINVAL;
++
 +	fp = filp_open("/data/system/packages.list", O_RDONLY | O_NOATIME, 0);
 +	if (IS_ERR(fp)) {
 +		ret = PTR_ERR(fp);
@@ -3759,9 +3808,9 @@ index 0000000..7dca01d
 +	}
 +
 +	size = i_size_read(file_inode(fp));
-+	if (size == 0 || size > (4 * 1024 * 1024)) {
++	if (size <= 0 || size > (4 * 1024 * 1024)) {
 +		filp_close(fp, NULL);
-+		return -EAGAIN;
++		return -EFBIG;
 +	}
 +
 +	buf = vmalloc(size + 1);
@@ -3769,89 +3818,65 @@ index 0000000..7dca01d
 +		filp_close(fp, NULL);
 +		return -ENOMEM;
 +	}
++	buf[size] = '\0';
 +
 +	ret = kernel_read(fp, buf, size, &pos);
-+	size_after = i_size_read(file_inode(fp));
 +	filp_close(fp, NULL);
-+	if (ret != (int)size || size_after != size || buf[size - 1] != '\n') {
++	if (ret != (int)size) {
 +		vfree(buf);
-+		return -EAGAIN;
++		return -EIO;
 +	}
 +
-+	buf[size] = '\0';
-+	*out = buf;
-+	return 0;
-+}
-+
-+/* Two identical reads mean the writer is not in the middle of the file. */
-+static int susfs_read_packages_list(char **out) {
-+	char *first = NULL;
-+	char *second = NULL;
-+	int ret;
-+
-+	*out = NULL;
-+	ret = susfs_read_packages_list_once(&first);
-+	if (ret)
-+		return ret;
-+
-+	msleep(20);
-+	ret = susfs_read_packages_list_once(&second);
-+	if (ret) {
-+		vfree(first);
-+		return ret;
-+	}
-+
-+	if (strcmp(first, second)) {
-+		vfree(first);
-+		vfree(second);
-+		return -EAGAIN;
-+	}
-+
-+	vfree(second);
-+	*out = first;
-+	return 0;
-+}
-+
-+static int susfs_uid_from_packages_buf(const char *buf, const char *app_name, uid_t *uid) {
-+	const char *line = buf;
-+	const char *nl;
-+	const char *uid_start;
-+	char uid_str[16];
-+	size_t name_len = strlen(app_name);
-+	size_t i;
-+	unsigned long val;
-+
-+	while (*line) {
++	line = buf;
++	while (line && *line) {
 +		nl = strchr(line, '\n');
-+		if (!nl)
-+			break;
++		if (nl) {
++			*nl = '\0';
++			tmp = nl + 1;
++		} else {
++			tmp = NULL;
++		}
 +
-+		if ((size_t)(nl - line) > name_len &&
-+		    !memcmp(line, app_name, name_len) &&
-+		    (line[name_len] == ' ' || line[name_len] == '\t')) {
-+			uid_start = line + name_len + 1;
-+			while (*uid_start == ' ' || *uid_start == '\t')
-+				uid_start++;
-+			i = 0;
-+			while (i < sizeof(uid_str) - 1 &&
-+			       uid_start[i] >= '0' && uid_start[i] <= '9') {
-+				uid_str[i] = uid_start[i];
-+				i++;
-+			}
-+			uid_str[i] = '\0';
-+			if (!i || kstrtoul(uid_str, 10, &val))
++		/* skip empty lines */
++		if (*line == '\0' || *line == '\r') {
++			line = tmp;
++			continue;
++		}
++
++		/* packages.list format: <package> <uid> <gid> ... */
++		pkg_name = strsep(&line, " \t");
++		if (!pkg_name || *pkg_name == '\0') {
++			line = tmp;
++			continue;
++		}
++
++		uid_str = strsep(&line, " \t");
++		if (!uid_str || *uid_str == '\0') {
++			line = tmp;
++			continue;
++		}
++
++		if (!strcmp(pkg_name, app_name)) {
++			if (kstrtoul(uid_str, 10, &val)) {
++				vfree(buf);
 +				return -EINVAL;
++			}
 +
 +			*uid = (uid_t)val % 100000;
++
++			vfree(buf);
++
 +			if (*uid < SUSFS_PRIORITY_UID_FILTER_MIN_UID ||
 +			    *uid > SUSFS_PRIORITY_UID_FILTER_MAX_UID)
 +				return -EINVAL;
++
 +			return 0;
 +		}
 +
-+		line = nl + 1;
++		line = tmp;
 +	}
 +
++	vfree(buf);
 +	return -ENOENT;
 +}
 +
@@ -3860,79 +3885,58 @@ index 0000000..7dca01d
 + * of every app and maps the uids into the given bitmap.
 + *
 + * The spaces before and after the commas are ignored.
-+ * packages.list is read once per attempt. A changing or truncated file is
-+ * retried and, if it never settles, -EAGAIN is returned so the caller keeps
-+ * the bitmap it already published.
-+ * If 'skip_failed' is true, names missing from a stable packages.list are
++ * The given string is modified while it is being parsed.
++ * If 'skip_failed' is true, the apps that are missing from packages.list are
 + * skipped, otherwise an error is returned.
 + * Returns 0 on success, a negative errno on failure.
 + */
 +static int susfs_parse_priority_app_names(char *app_str, unsigned long *bits, bool skip_failed) {
-+	char *list = NULL;
-+	char *scratch = NULL;
-+	char *token, *saveptr;
++	char *token = NULL;
++	char *saveptr = app_str;
 +	uid_t uid = 0;
-+	int attempt;
-+	int ret = -EAGAIN;
++	int ret;
 +
-+	for (attempt = 0; attempt < 8; attempt++) {
-+		if (list)
-+			vfree(list);
-+		list = NULL;
-+		ret = susfs_read_packages_list(&list);
-+		if (ret == -EAGAIN) {
-+			msleep(20);
-+			continue;
-+		}
-+		if (ret)
-+			goto out;
-+		break;
-+	}
-+	if (ret)
-+		goto out;
-+
-+	scratch = kstrdup(app_str, GFP_KERNEL);
-+	if (!scratch) {
-+		ret = -ENOMEM;
-+		goto out;
-+	}
-+
-+	saveptr = scratch;
 +	while ((token = strsep(&saveptr, ",")) != NULL) {
 +		token = strim(token);
-+		if (*token == '\0')
++		if (*token == '\0') {
++			/* tolerate the empty items, e.g., "com.foo,,com.bar" */
 +			continue;
++		}
 +
 +		if (!susfs_is_valid_app_name(token)) {
 +			SUSFS_LOGE("invalid app name '%s'\n", token);
-+			ret = -EINVAL;
-+			goto out;
++			return -EINVAL;
 +		}
 +
-+		ret = susfs_uid_from_packages_buf(list, token, &uid);
++		ret = susfs_resolve_priority_app_uid(token, &uid);
 +		if (ret) {
-+			if (ret == -ENOENT && skip_failed)
++			if (skip_failed)
 +				continue;
-+			goto out;
++			return ret;
++		}
++
++		if (uid < SUSFS_PRIORITY_UID_FILTER_MIN_UID || uid > SUSFS_PRIORITY_UID_FILTER_MAX_UID) {
++			SUSFS_LOGE("the uid %u of the app '%s' is out of the allowed range [%d, %d]\n",
++					uid, token, SUSFS_PRIORITY_UID_FILTER_MIN_UID,
++					SUSFS_PRIORITY_UID_FILTER_MAX_UID);
++			if (!skip_failed)
++				return -EINVAL;
++			continue;
 +		}
 +
 +		set_bit(uid - SUSFS_PRIORITY_UID_FILTER_MIN_UID, bits);
 +		SUSFS_LOGI("app_name '%s', uid '%u' is now added to priority_uid_filter_bitmap\n", token, uid);
 +	}
 +
-+	ret = 0;
-+out:
-+	kvfree(scratch);
-+	vfree(list);
-+	return ret;
++	return 0;
 +}
 +
-+void susfs_set_priority_uid_filter(void __user **user_info) {
+++void susfs_set_priority_uid_filter(void __user **user_info) {
 +	struct st_susfs_priority_uid_filter *info = NULL;
 +	struct susfs_priority_uid_filter_bitmap *new_bitmap = NULL;
 +	struct susfs_priority_uid_filter_bitmap *old_bitmap = NULL;
 +	char *new_app_strings = NULL;
-+	const struct cred *saved_cred = NULL;
++	struct cred *orig_cred = NULL;
 +	size_t app_str_len = 0;
 +	int err = 0;
 +	static bool is_uid_filter_set_before = false;
@@ -3985,24 +3989,18 @@ index 0000000..7dca01d
 +	 * restrictions of the calling process, hence the selinux domain is
 +	 * switched to the KernelSU one before the uids are resolved.
 +	 */
-+	/*
-+	 * 4.14 KernelSU exposes ksu_cred. Combined with
-+	 * override_creds() is the domain switch this backport already uses
-+	 * in susfs_run_sus_path_loop().
-+	 */
-+	if (!ksu_cred) {
-+		SUSFS_LOGE("ksu_cred is not ready\n");
++	orig_cred = susfs_switch_to_ksu_domain();
++	if (!orig_cred) {
 +		err = -EINVAL;
 +		goto out_free_new_bitmap;
 +	}
-+	saved_cred = override_creds(ksu_cred);
 +
 +	if (is_uid_filter_set_before)
 +		SUSFS_LOGI("renewing the priority uid filter\n");
 +	err = susfs_parse_priority_app_names(info->app_strings, new_bitmap->bits, true);
 +
-+	revert_creds(saved_cred);
-+	saved_cred = NULL;
++	susfs_restore_creds(orig_cred);
++	orig_cred = NULL;
 +
 +	if (err)
 +		goto out_free_new_bitmap;
@@ -4055,7 +4053,7 @@ index 0000000..7dca01d
 +static int susfs_priority_app_strings_worker(void *data) {
 +	struct susfs_priority_uid_filter_bitmap *new_bitmap = NULL;
 +	struct susfs_priority_uid_filter_bitmap *old_bitmap = NULL;
-+	const struct cred *saved_cred = NULL;
++	struct cred *orig_cred = NULL;
 +	char *app_strings = NULL;
 +	size_t app_str_len = 0;
 +	int ret = 0;
@@ -4065,9 +4063,9 @@ index 0000000..7dca01d
 +	 * restrictions of the default domain of the thread, hence the selinux
 +	 * domain is switched to the KernelSU one.
 +	 */
-+	if (!ksu_cred)
++	orig_cred = susfs_switch_to_ksu_domain();
++	if (!orig_cred)
 +		goto out;
-+	saved_cred = override_creds(ksu_cred);
 +
 +	/* take a snapshot of the stored app package names */
 +	mutex_lock(&susfs_mutex_lock_priority_uid_filter);
@@ -4088,14 +4086,12 @@ index 0000000..7dca01d
 +
 +	/* the apps that are uninstalled already are skipped */
 +	ret = susfs_parse_priority_app_names(app_strings, new_bitmap->bits, true);
-+	if (ret) {
-+		SUSFS_LOGE("priority uid refresh failed (%d), keeping the current filter\n", ret);
++	if (ret)
 +		goto out_restore_creds;
-+	}
 +
 +	/*
-+	 * Publish the newly resolved uids. Readers keep using the old bitmap
-+	 * until this assignment.
++	 * The old bitmap is zeroed and the newly resolved uids are mapped into
++	 * the new one, which is then published to the readers.
 +	 */
 +	mutex_lock(&susfs_mutex_lock_priority_uid_filter);
 +	old_bitmap = rcu_dereference_protected(priority_uid_filter_bitmap, lockdep_is_held(&susfs_mutex_lock_priority_uid_filter));
@@ -4111,8 +4107,8 @@ index 0000000..7dca01d
 +	SUSFS_LOGI("the uids of the priority uid filter are resolved again\n");
 +
 +out_restore_creds:
-+	revert_creds(saved_cred);
-+	saved_cred = NULL;
++	susfs_restore_creds(orig_cred);
++	orig_cred = NULL;
 +out:
 +	if (new_bitmap)
 +		kfree(new_bitmap);
