@@ -3931,7 +3931,7 @@ index 0000000..7dca01d
 +	return 0;
 +}
 +
-++void susfs_set_priority_uid_filter(void __user **user_info) {
++void susfs_set_priority_uid_filter(void __user **user_info) {
 +	struct st_susfs_priority_uid_filter *info = NULL;
 +	struct susfs_priority_uid_filter_bitmap *new_bitmap = NULL;
 +	struct susfs_priority_uid_filter_bitmap *old_bitmap = NULL;
