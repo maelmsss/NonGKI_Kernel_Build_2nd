@@ -5201,30 +5201,18 @@ diff --git a/security/selinux/selinuxfs.c b/security/selinux/selinuxfs.c
 diff --git a/security/selinux/ss/services.c b/security/selinux/ss/services.c
 --- a/security/selinux/ss/services.c
 +++ b/security/selinux/ss/services.c
-@@ -76,6 +76,11 @@
+@@ -75,6 +75,10 @@
+ #include "xfrm.h"
  #include "ebitmap.h"
  #include "audit.h"
 +#ifdef CONFIG_KSU_SUSFS
-+extern bool susfs_is_sus_type_rcu(u32 type_value);
 +extern void susfs_spoof_avd_allowed_rcu(u32 s_type, u32 t_type, u32 c_type, u32 *avd_allowed);
 +extern bool susfs_is_current_ksu_domain(void);
 +#endif
  
  /* Policy capability names */
  const char *selinux_policycap_names[__POLICYDB_CAPABILITY_MAX] = {
- 	"network_peer_controls",
-@@ -1163,6 +1168,10 @@
- 	}
- 	context_struct_compute_av(policydb, scontext, tcontext, tclass, avd,
- 				  xperms);
-+#ifdef CONFIG_KSU_SUSFS
-+	susfs_spoof_avd_allowed_rcu(scontext->type, tcontext->type, tclass,
-+				    &avd->allowed);
-+#endif
- 	map_decision(&state->ss->map, orig_tclass, avd,
- 		     policydb->allow_unknown);
- out:
-@@ -1217,6 +1226,10 @@
+@@ -1217,6 +1222,10 @@
  
  	context_struct_compute_av(policydb, scontext, tcontext, tclass, avd,
  				  NULL);
@@ -5235,18 +5223,7 @@ diff --git a/security/selinux/ss/services.c b/security/selinux/ss/services.c
   out:
  	read_unlock(&state->ss->policy_rwlock);
  	return;
-@@ -1453,6 +1466,10 @@
- 	if (!typdatum || typdatum->attribute)
- 		goto out;
- 
-+#ifdef CONFIG_KSU_SUSFS
-+	if (susfs_is_sus_type_rcu(typdatum->value))
-+		goto out;
-+#endif
- 	ctx->type = typdatum->value;
- 
- 	rc = mls_context_to_sid(pol, oldc, p, ctx, sidtabp, def_sid);
-@@ -2204,6 +2221,11 @@
+@@ -2204,6 +2213,11 @@
  		state->ss->sidtab = newsidtab;
  		security_load_policycaps(state);
          state->initialized = 1;
@@ -5258,7 +5235,7 @@ diff --git a/security/selinux/ss/services.c b/security/selinux/ss/services.c
  		seqno = ++state->ss->latest_granting;
  		selinux_complete_init();
  		avc_ss_reset(state->avc, seqno);
-@@ -2278,6 +2300,11 @@
+@@ -2278,6 +2292,11 @@
  	oldmapping = state->ss->map.mapping;
  	state->ss->map.mapping = newmap.mapping;
  	state->ss->map.size = newmap.size;
@@ -5270,7 +5247,7 @@ diff --git a/security/selinux/ss/services.c b/security/selinux/ss/services.c
  	seqno = ++state->ss->latest_granting;
  	write_unlock_irq(&state->ss->policy_rwlock);
  
-@@ -2958,6 +2985,11 @@
+@@ -2958,6 +2977,11 @@
  			goto out;
  	}
  
