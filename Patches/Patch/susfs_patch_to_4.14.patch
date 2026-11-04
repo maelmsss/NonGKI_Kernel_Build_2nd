@@ -466,7 +466,7 @@ index 80b743c..c27fde5 100644
 +#ifdef CONFIG_KSU_SUSFS_OPEN_REDIRECT
 +	if (SUSFS_IS_INODE_OPEN_REDIRECT(inode)) {
 +		res = susfs_open_redirect_spoof_vfs_readlink(inode, buffer, buflen);
-+		if (!res) {
++		if (res != -ENOENT) {
 +			do_delayed_call(&done);
 +			return res;
 +		}
@@ -489,7 +489,7 @@ index 80b743c..c27fde5 100644
 +		{
 +			if (SUSFS_IS_INODE_OPEN_REDIRECT(inode)) {
 +				res = susfs_open_redirect_spoof_vfs_readlink(inode, buffer, buflen);
-+				if (!res)
++				if (res != -ENOENT)
 +					return res;
 +			}
  			return inode->i_op->readlink(dentry, buffer, buflen);
@@ -2118,7 +2118,7 @@ new file mode 100644
 index 0000000..7dca01d
 --- /dev/null
 +++ b/fs/susfs.c
-@@ -0,0 +1,2213 @@
+@@ -0,0 +1,2227 @@
 +#include <linux/version.h>
 +#include <linux/cred.h>
 +#include <linux/fs.h>
@@ -3225,8 +3225,10 @@ index 0000000..7dca01d
 +	}
 +
 +	if (is_first_dup_found) {
-+		hash_for_each_possible_safe(OPEN_REDIRECT_HLIST, tmp_entry_redirected, tmp_hlist_node, node, redirected_inode->i_ino) {
-+			if (!strcmp(tmp_entry_redirected->info.target_pathname, info.redirected_pathname)) {
++		hash_for_each_possible_safe(OPEN_REDIRECT_HLIST, tmp_entry_redirected, tmp_hlist_node, node, tmp_entry_target->redirected_ino) {
++			if (tmp_entry_redirected->reversed_lookup_only &&
++			    tmp_entry_redirected->target_dev == tmp_entry_target->redirected_dev &&
++			    tmp_entry_redirected->redirected_ino == tmp_entry_target->target_ino) {
 +				is_second_dup_found = true;
 +				hash_del_rcu(&tmp_entry_redirected->node);
 +				break;
@@ -3328,18 +3330,23 @@ index 0000000..7dca01d
 +		{
 +			SUSFS_LOGI("spoof path '%s' to '%s'\n",
 +					entry->info.target_pathname, entry->info.redirected_pathname);
-+			if (strlen(entry->info.redirected_pathname) >= buflen) {
-+				SUSFS_LOGE("buflen not big enough\n");
++			/*
++			 * Same contract as readlink_copy(): return the copied length.
++			 * Returning 0 makes userspace see an empty symlink.
++			 */
++			{
++				int len = strlen(entry->info.redirected_pathname);
++
++				if (len > buflen)
++					len = buflen;
++				if (copy_to_user(buffer, entry->info.redirected_pathname, len)) {
++					SUSFS_LOGE("copy_to_user() failed\n");
++					srcu_read_unlock(&susfs_srcu_open_redirect, srcu_idx);
++					return -EFAULT;
++				}
 +				srcu_read_unlock(&susfs_srcu_open_redirect, srcu_idx);
-+				return -ENAMETOOLONG;
++				return len;
 +			}
-+			if (copy_to_user(buffer, entry->info.redirected_pathname, strlen(entry->info.redirected_pathname))) {
-+				SUSFS_LOGE("copy_to_user() failed\n");
-+				srcu_read_unlock(&susfs_srcu_open_redirect, srcu_idx);
-+				return -EFAULT;
-+			}
-+			srcu_read_unlock(&susfs_srcu_open_redirect, srcu_idx);
-+			return 0;
 +		}
 +	}
 +	srcu_read_unlock(&susfs_srcu_open_redirect, srcu_idx);
@@ -3356,12 +3363,19 @@ index 0000000..7dca01d
 +		{
 +			SUSFS_LOGI("spoof path '%s' to '%s'\n",
 +					entry->info.target_pathname, entry->info.redirected_pathname);
-+			if (strlen(entry->info.redirected_pathname) >= buflen) {
-+				SUSFS_LOGE("buflen not big enough\n");
-+				srcu_read_unlock(&susfs_srcu_open_redirect, srcu_idx);
-+				return -ENAMETOOLONG;
++			/*
++			 * tmp is one page in do_proc_readlink(). Never trust a larger
++			 * userspace buflen. strscpy size includes the NUL.
++			 */
++			{
++				size_t n = buflen > PAGE_SIZE ? PAGE_SIZE : buflen;
++
++				if (strscpy(tmp_buf, entry->info.redirected_pathname, n) < 0) {
++					SUSFS_LOGE("buffer not big enough\n");
++					srcu_read_unlock(&susfs_srcu_open_redirect, srcu_idx);
++					return -ENAMETOOLONG;
++				}
 +			}
-+			strscpy(tmp_buf, entry->info.redirected_pathname, SUSFS_MAX_LEN_PATHNAME - 1);
 +			srcu_read_unlock(&susfs_srcu_open_redirect, srcu_idx);
 +			return 0;
 +		}
