@@ -1932,60 +1932,41 @@ index 0fda4b6..dd2c150 100644
  /**
   * generic_fillattr - Fill in the basic attributes from the inode struct
   * @inode: Inode to use as the source
-@@ -75,9 +80,53 @@ int vfs_getattr_nosec(const struct path *path, struct kstat *stat,
+@@ -75,9 +80,34 @@ int vfs_getattr_nosec(const struct path *path, struct kstat *stat,
  	stat->result_mask |= STATX_BASIC_STATS;
  	request_mask &= STATX_ALL;
  	query_flags &= KSTAT_QUERY_FLAGS;
 +#ifdef CONFIG_KSU_SUSFS_SUS_KSTAT
-+	if (susfs_is_current_app_uid()) {
-+		bool is_fuse = false;
-+		if (susfs_is_inode_sus_kstat(d_backing_inode(path->dentry), &is_fuse)) {
-+			if (!is_fuse) {
-+				// stat->mnt_id = real_mount(path->mnt)->mnt_id;
-+				// only for 5.10 kernel
-+				stat->result_mask |= STATX_SUS_KSTAT;
-+			}
-+			// stat->mnt_id = real_mount(path->mnt)->mnt_id;
-+			// only for 5.10 kernel
-+			stat->result_mask |= STATX_SUS_KSTAT_FUSE;
-+		}
-+	}
-+#endif // #ifdef CONFIG_KSU_SUSFS_SUS_KSTAT
-+
- 	if (inode->i_op->getattr)
-+#ifdef CONFIG_KSU_SUSFS_SUS_KSTAT
 +	{
-+		int err = inode->i_op->getattr(path, stat, request_mask,
-+					    query_flags);
-+		if (!err) {
-+			if (stat->result_mask & STATX_SUS_KSTAT) {
-+				susfs_sus_kstat_spoof_generic_fillattr(inode, stat, STATX_SUS_KSTAT);
-+				return err;
-+			}
-+			if (stat->result_mask & STATX_SUS_KSTAT_FUSE) {
-+				susfs_sus_kstat_spoof_generic_fillattr(inode, stat, STATX_SUS_KSTAT_FUSE);
-+			return err;
-+			}
++		int error;
++		u32 susfs_mask = 0;
++
++		if (susfs_is_current_app_uid()) {
++			bool is_fuse = false;
++
++			if (susfs_is_inode_sus_kstat(d_backing_inode(path->dentry), &is_fuse))
++				susfs_mask = is_fuse ? STATX_SUS_KSTAT_FUSE : STATX_SUS_KSTAT;
 +		}
-+		return err;
-+	}
-+	if (stat->result_mask & STATX_SUS_KSTAT) {
-+		generic_fillattr(inode, stat);
-+		susfs_sus_kstat_spoof_generic_fillattr(inode, stat, STATX_SUS_KSTAT);
-+		return 0;
-+	}
-+	if (stat->result_mask & STATX_SUS_KSTAT_FUSE) {
-+		generic_fillattr(inode, stat);
-+		susfs_sus_kstat_spoof_generic_fillattr(inode, stat, STATX_SUS_KSTAT_FUSE);
++		if (inode->i_op->getattr) {
++			error = inode->i_op->getattr(path, stat, request_mask, query_flags);
++			if (error)
++				return error;
++		} else {
++			generic_fillattr(inode, stat);
++		}
++		/* Private routing bit. Do not publish it in stat->result_mask. */
++		if (susfs_mask)
++			susfs_sus_kstat_spoof_generic_fillattr(inode, stat, susfs_mask);
 +		return 0;
 +	}
 +#else
+ 	if (inode->i_op->getattr)
  		return inode->i_op->getattr(path, stat, request_mask,
  					    query_flags);
-+#endif // #ifdef CONFIG_KSU_SUSFS_SUS_KSTAT
  
  	generic_fillattr(inode, stat);
  	return 0;
++#endif // #ifdef CONFIG_KSU_SUSFS_SUS_KSTAT
 diff --git a/fs/statfs.c b/fs/statfs.c
 index e6ceb3e..fd08803 100644
 --- a/fs/statfs.c
@@ -2137,7 +2118,7 @@ new file mode 100644
 index 0000000..7dca01d
 --- /dev/null
 +++ b/fs/susfs.c
-@@ -0,0 +1,2145 @@
+@@ -0,0 +1,2213 @@
 +#include <linux/version.h>
 +#include <linux/cred.h>
 +#include <linux/fs.h>
@@ -3867,6 +3848,11 @@ index 0000000..7dca01d
 +static char *susfs_priority_app_strings = NULL;
 +/* Ensures that there is only one resolving thread running at the same time */
 +static atomic_t susfs_priority_app_strings_running = ATOMIC_INIT(0);
++/* Bumped on every refresh request. A running worker retries until it matches. */
++static atomic_t susfs_priority_refresh_seq = ATOMIC_INIT(0);
++/* Captured while the configuring task still has a userspace mount namespace. */
++static struct path susfs_priority_system_path;
++static bool susfs_priority_system_valid;
 +
 +/*
 + * Checks whether the given string is a valid app package name.
@@ -3897,7 +3883,7 @@ index 0000000..7dca01d
 + * Resolves the uid of the given app package name from /data/system/packages.list.
 + * Returns 0 on success, a negative errno on failure.
 + */
-+static int susfs_resolve_priority_app_uid(const char *app_name, uid_t *uid) {
++static int susfs_resolve_priority_app_uid(const char *app_name, uid_t *uid, struct path *system_root) {
 +	struct file *fp;
 +	char *buf = NULL;
 +	char *line, *tmp, *nl;
@@ -3913,7 +3899,20 @@ index 0000000..7dca01d
 +	if (!susfs_is_valid_app_name(app_name))
 +		return -EINVAL;
 +
-+	fp = filp_open("/data/system/packages.list", O_RDONLY | O_NOATIME, 0);
++	if (system_root && system_root->mnt) {
++		struct path file_path;
++
++		ret = vfs_path_lookup(system_root->dentry, system_root->mnt,
++				"packages.list", LOOKUP_FOLLOW, &file_path);
++		if (ret) {
++			SUSFS_LOGE("failed to lookup packages.list: %d\n", ret);
++			return ret;
++		}
++		fp = dentry_open(&file_path, O_RDONLY | O_NOATIME, current_cred());
++		path_put(&file_path);
++	} else {
++		fp = filp_open("/data/system/packages.list", O_RDONLY | O_NOATIME, 0);
++	}
 +	if (IS_ERR(fp)) {
 +		ret = PTR_ERR(fp);
 +		SUSFS_LOGE("failed to open /data/system/packages.list: %d\n", ret);
@@ -4003,7 +4002,7 @@ index 0000000..7dca01d
 + * skipped, otherwise an error is returned.
 + * Returns 0 on success, a negative errno on failure.
 + */
-+static int susfs_parse_priority_app_names(char *app_str, unsigned long *bits, bool skip_failed) {
++static int susfs_parse_priority_app_names(char *app_str, unsigned long *bits, bool skip_failed, struct path *system_root) {
 +	char *token = NULL;
 +	char *saveptr = app_str;
 +	uid_t uid = 0;
@@ -4021,7 +4020,7 @@ index 0000000..7dca01d
 +			return -EINVAL;
 +		}
 +
-+		ret = susfs_resolve_priority_app_uid(token, &uid);
++		ret = susfs_resolve_priority_app_uid(token, &uid, system_root);
 +		if (ret) {
 +			if (skip_failed)
 +				continue;
@@ -4110,7 +4109,22 @@ index 0000000..7dca01d
 +
 +	if (is_uid_filter_set_before)
 +		SUSFS_LOGI("renewing the priority uid filter\n");
-+	err = susfs_parse_priority_app_names(info->app_strings, new_bitmap->bits, true);
++	{
++		struct path new_system = { };
++		int path_err;
++
++		path_err = kern_path("/data/system", LOOKUP_FOLLOW | LOOKUP_DIRECTORY, &new_system);
++		if (!path_err) {
++			mutex_lock(&susfs_mutex_lock_priority_uid_filter);
++			if (susfs_priority_system_valid)
++				path_put(&susfs_priority_system_path);
++			susfs_priority_system_path = new_system;
++			susfs_priority_system_valid = true;
++			mutex_unlock(&susfs_mutex_lock_priority_uid_filter);
++		}
++	}
++	/* Missing packages are skipped, matching upstream susfs. */
++	err = susfs_parse_priority_app_names(info->app_strings, new_bitmap->bits, true, NULL);
 +
 +	susfs_restore_creds(orig_cred);
 +	orig_cred = NULL;
@@ -4167,8 +4181,10 @@ index 0000000..7dca01d
 +	struct susfs_priority_uid_filter_bitmap *new_bitmap = NULL;
 +	struct susfs_priority_uid_filter_bitmap *old_bitmap = NULL;
 +	struct cred *orig_cred = NULL;
++	struct path system_root = { };
 +	char *app_strings = NULL;
 +	size_t app_str_len = 0;
++	int seen = atomic_read(&susfs_priority_refresh_seq);
 +	int ret = 0;
 +
 +	/*
@@ -4180,54 +4196,86 @@ index 0000000..7dca01d
 +	if (!orig_cred)
 +		goto out;
 +
-+	/* take a snapshot of the stored app package names */
-+	mutex_lock(&susfs_mutex_lock_priority_uid_filter);
-+	if (susfs_priority_app_strings) {
-+		app_str_len = strlen(susfs_priority_app_strings);
-+		app_strings = kvmalloc(app_str_len + 1, GFP_KERNEL | __GFP_ZERO);
-+		if (app_strings)
-+			memcpy(app_strings, susfs_priority_app_strings, app_str_len + 1);
++	for (;;) {
++		seen = atomic_read(&susfs_priority_refresh_seq);
++		if (system_root.mnt) {
++			path_put(&system_root);
++			memset(&system_root, 0, sizeof(system_root));
++		}
++		kvfree(app_strings);
++		app_strings = NULL;
++		kfree(new_bitmap);
++		new_bitmap = NULL;
++
++		mutex_lock(&susfs_mutex_lock_priority_uid_filter);
++		if (susfs_priority_app_strings) {
++			app_str_len = strlen(susfs_priority_app_strings);
++			app_strings = kvmalloc(app_str_len + 1, GFP_KERNEL | __GFP_ZERO);
++			if (app_strings)
++				memcpy(app_strings, susfs_priority_app_strings, app_str_len + 1);
++		}
++		if (susfs_priority_system_valid) {
++			system_root = susfs_priority_system_path;
++			path_get(&system_root);
++		}
++		mutex_unlock(&susfs_mutex_lock_priority_uid_filter);
++
++		if (!app_strings)
++			break;
++
++		new_bitmap = (struct susfs_priority_uid_filter_bitmap *)kzalloc(sizeof(*new_bitmap), GFP_KERNEL);
++		if (!new_bitmap) {
++			ret = -ENOMEM;
++			break;
++		}
++
++		/* Uninstalled apps are skipped. A kworker uses the captured path. */
++		ret = susfs_parse_priority_app_names(app_strings, new_bitmap->bits, true,
++				system_root.mnt ? &system_root : NULL);
++		if (ret) {
++			if (atomic_read(&susfs_priority_refresh_seq) != seen)
++				continue;
++			break;
++		}
++
++		mutex_lock(&susfs_mutex_lock_priority_uid_filter);
++		if (atomic_read(&susfs_priority_refresh_seq) != seen) {
++			mutex_unlock(&susfs_mutex_lock_priority_uid_filter);
++			continue;
++		}
++		old_bitmap = rcu_dereference_protected(priority_uid_filter_bitmap, lockdep_is_held(&susfs_mutex_lock_priority_uid_filter));
++		rcu_assign_pointer(priority_uid_filter_bitmap, new_bitmap);
++		new_bitmap = NULL;
++		mutex_unlock(&susfs_mutex_lock_priority_uid_filter);
++
++		if (old_bitmap) {
++			synchronize_rcu();
++			kfree_rcu(old_bitmap, rcu);
++			old_bitmap = NULL;
++		}
++		SUSFS_LOGI("the uids of the priority uid filter are resolved again\n");
++		if (atomic_read(&susfs_priority_refresh_seq) != seen)
++			continue;
++		break;
 +	}
-+	mutex_unlock(&susfs_mutex_lock_priority_uid_filter);
 +
-+	if (!app_strings)
-+		goto out_restore_creds;
-+
-+	new_bitmap = (struct susfs_priority_uid_filter_bitmap *)kzalloc(sizeof(*new_bitmap), GFP_KERNEL);
-+	if (!new_bitmap)
-+		goto out_restore_creds;
-+
-+	/* the apps that are uninstalled already are skipped */
-+	ret = susfs_parse_priority_app_names(app_strings, new_bitmap->bits, true);
-+	if (ret)
-+		goto out_restore_creds;
-+
-+	/*
-+	 * The old bitmap is zeroed and the newly resolved uids are mapped into
-+	 * the new one, which is then published to the readers.
-+	 */
-+	mutex_lock(&susfs_mutex_lock_priority_uid_filter);
-+	old_bitmap = rcu_dereference_protected(priority_uid_filter_bitmap, lockdep_is_held(&susfs_mutex_lock_priority_uid_filter));
-+	rcu_assign_pointer(priority_uid_filter_bitmap, new_bitmap);
-+	new_bitmap = NULL;
-+	mutex_unlock(&susfs_mutex_lock_priority_uid_filter);
-+
-+	if (old_bitmap) {
-+		synchronize_rcu();
-+		kfree_rcu(old_bitmap, rcu);
-+	}
-+
-+	SUSFS_LOGI("the uids of the priority uid filter are resolved again\n");
-+
-+out_restore_creds:
 +	susfs_restore_creds(orig_cred);
 +	orig_cred = NULL;
 +out:
++	if (system_root.mnt)
++		path_put(&system_root);
 +	if (new_bitmap)
 +		kfree(new_bitmap);
 +	if (app_strings)
 +		kvfree(app_strings);
 +	atomic_set(&susfs_priority_app_strings_running, 0);
++	/*
++	 * A request that arrived while this thread still owned the flag
++	 * did not start another thread. Pick it up.
++	 */
++	if (atomic_read(&susfs_priority_refresh_seq) != seen &&
++	    !atomic_cmpxchg(&susfs_priority_app_strings_running, 0, 1))
++		return susfs_priority_app_strings_worker(data);
 +
 +	return ret;
 +}
@@ -4238,7 +4286,8 @@ index 0000000..7dca01d
 + * which must not be applied to the calling process.
 + */
 +void susfs_parse_priority_app_strings(void) {
-+	/* do not spawn a new thread if there is already one running */
++	atomic_inc(&susfs_priority_refresh_seq);
++	/* The running worker observes the new sequence and retries. */
 +	if (atomic_cmpxchg(&susfs_priority_app_strings_running, 0, 1))
 +		return;
 +
