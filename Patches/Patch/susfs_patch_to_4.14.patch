@@ -5092,11 +5092,12 @@ index 1111111..2222222 100644
 diff --git a/security/selinux/hooks.c b/security/selinux/hooks.c
 --- a/security/selinux/hooks.c
 +++ b/security/selinux/hooks.c
-@@ -98,6 +98,11 @@
+@@ -98,6 +98,12 @@
  #include "audit.h"
  #include "avc_ss.h"
  
 +#ifdef CONFIG_KSU_SUSFS
++#include <linux/compiler.h>
 +extern bool ksu_selinux_hide_running __read_mostly;
 +extern int my_setprocattr(const char *name, void *value, size_t size);
 +#endif
@@ -5113,7 +5114,7 @@ diff --git a/security/selinux/hooks.c b/security/selinux/hooks.c
 +{
 +	if (likely(!strcmp(name, "current") &&
 +		   current_uid().val >= 10000 &&
-+		   ksu_selinux_hide_running))
++		   READ_ONCE(ksu_selinux_hide_running)))
 +		return my_setprocattr(name, value, size);
 +	return selinux_setprocattr(name, value, size);
 +}
@@ -5159,8 +5160,8 @@ diff --git a/security/selinux/selinuxfs.c b/security/selinux/selinuxfs.c
  	struct page    *status = selinux_kernel_status_page(fsi->state);
  
 +#ifdef CONFIG_KSU_SUSFS
-+	if (likely(current_uid().val >= 10000 && ksu_selinux_hide_running)) {
-+		void *data = fake_status;
++	if (likely(current_uid().val >= 10000 && READ_ONCE(ksu_selinux_hide_running))) {
++		void *data = READ_ONCE(fake_status);
 +		if (data) {
 +			filp->private_data = data;
 +			return 0;
@@ -5175,7 +5176,7 @@ diff --git a/security/selinux/selinuxfs.c b/security/selinux/selinuxfs.c
  
 +#ifdef CONFIG_KSU_SUSFS
 +	if (static_branch_unlikely(&fake_status_initialize_key)) {
-+		if (!fake_status)
++		if (!READ_ONCE(fake_status))
 +			initialize_fake_status();
 +	}
 +#endif
@@ -5189,7 +5190,7 @@ diff --git a/security/selinux/selinuxfs.c b/security/selinux/selinuxfs.c
 +#ifdef CONFIG_KSU_SUSFS
 +static ssize_t handle_sel_write_context(struct file *file, char *buf, size_t size)
 +{
-+	if (likely(current_uid().val >= 10000 && ksu_selinux_hide_running))
++	if (likely(current_uid().val >= 10000 && READ_ONCE(ksu_selinux_hide_running)))
 +		return my_write_context(file, buf, size);
 +	return sel_write_context(file, buf, size);
 +}
@@ -5235,7 +5236,7 @@ diff --git a/security/selinux/selinuxfs.c b/security/selinux/selinuxfs.c
 +#ifdef CONFIG_KSU_SUSFS
 +static ssize_t handle_sel_write_access(struct file *file, char *buf, size_t size)
 +{
-+	if (likely(current_uid().val >= 10000 && ksu_selinux_hide_running))
++	if (likely(current_uid().val >= 10000 && READ_ONCE(ksu_selinux_hide_running)))
 +		return my_write_access(file, buf, size);
 +	return sel_write_access(file, buf, size);
 +}
