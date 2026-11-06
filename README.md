@@ -15,3 +15,4 @@ Kernel source, branch `main`, defconfig `exynos9820_defconfig`. SUSFS is `Patche
 - [SUSFS](https://gitlab.com/simonpunk/susfs4ksu)
 - [Baseband Guard](https://github.com/vc-teahouse/Baseband-guard)
 - [NoMount](https://github.com/maxsteeel/nomount)
+- [vpnhide_next_backend](https://github.com/soranerai/vpnhide_next_backend)
