@@ -15,7 +15,7 @@ runs:
           mkdir -p tmp
 
           if [[ "${{ env.AK3_SOURCE }}" =~ "osm0sis" ]]; then
-            sed -i 's/ExampleKernel by osm0sis @ xda-developers/NonGKI Kernel Build by JackAltman @ GitHub/g' AnyKernel3/anykernel.sh
+            sed -i 's/ExampleKernel by osm0sis @ xda-developers/exynos982x Kernel by maelmsss @ GitHub/g' AnyKernel3/anykernel.sh
             sed -i 's/do.devicecheck=1/do.devicecheck=0/g' AnyKernel3/anykernel.sh
             sed -i 's!BLOCK=/dev/block/platform/omap/omap_hsmmc.0/by-name/boot;!BLOCK=auto;!g' AnyKernel3/anykernel.sh
             sed -i 's/IS_SLOT_DEVICE=0;/is_slot_device=auto;/g' AnyKernel3/anykernel.sh
@@ -71,12 +71,18 @@ runs:
                 DTB_PATH="dts"
             elif ls $IMAGE_DIR/dts/vendor/${{ env.GENERATE_CHIP }}/*.dtb 1> /dev/null 2>&1; then
                 DTB_PATH="dts/vendor"
+            elif ls $IMAGE_DIR/dts/exynos/*.dtb 1> /dev/null 2>&1; then
+                DTB_PATH="dts/exynos"
             else
                 echo "[-] Could not found dts, abort."
                 false
             fi
 
-            cat $IMAGE_DIR/$DTB_PATH/${{ env.GENERATE_CHIP }}/*.dtb > $IMAGE_DIR/dtb
+            if [[ "$DTB_PATH" == "dts/exynos" ]]; then
+                cat $IMAGE_DIR/dts/exynos/*.dtb > $IMAGE_DIR/dtb
+            else
+                cat $IMAGE_DIR/$DTB_PATH/${{ env.GENERATE_CHIP }}/*.dtb > $IMAGE_DIR/dtb
+            fi
             cp -fp $IMAGE_DIR/dtb tmp
             echo "Generated ${{ env.GENERATE_CHIP }} DTB."
           else
@@ -168,12 +174,18 @@ runs:
                 DTB_PATH="dts"
             elif ls $IMAGE_DIR/dts/vendor/${{ env.GENERATE_CHIP }}/*.dtb 1> /dev/null 2>&1; then
                 DTB_PATH="dts/vendor"
+            elif ls $IMAGE_DIR/dts/exynos/*.dtb 1> /dev/null 2>&1; then
+                DTB_PATH="dts/exynos"
             else
                 echo "[-] Could not found dts, abort."
                 false
             fi
 
-            cat $IMAGE_DIR/$DTB_PATH/${{ env.GENERATE_CHIP }}/*.dtb > $IMAGE_DIR/dtb
+            if [[ "$DTB_PATH" == "dts/exynos" ]]; then
+                cat $IMAGE_DIR/dts/exynos/*.dtb > $IMAGE_DIR/dtb
+            else
+                cat $IMAGE_DIR/$DTB_PATH/${{ env.GENERATE_CHIP }}/*.dtb > $IMAGE_DIR/dtb
+            fi
             cp -fp $IMAGE_DIR/dtb out/dtb
             echo "[+] Generated ${{ env.GENERATE_CHIP }} dtb."
 
