@@ -17,15 +17,8 @@ runs:
             echo "[+] executed SUSFS inline hook successfully."
 
           # Check syscall hook
-          elif [[ ${{ env.HOOK_METHOD }} == "syscall" ]]; then
-            # Core
-            cp /tmp/Patches/syscall_hook_patches.sh ./
-            bash syscall_hook_patches.sh ./
-
-            echo "[+] executed syscall hook successfully."
-
           else
-            echo "[-] please input a vaild option!"
+            echo "[-] SUSFS_ENABLE is not true. This tree only ships Patches/susfs_inline_hook_patches.sh."
             false
 
           fi
