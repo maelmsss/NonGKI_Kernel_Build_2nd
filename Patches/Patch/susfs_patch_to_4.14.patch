@@ -5304,7 +5304,19 @@ diff --git a/security/selinux/selinuxfs.c b/security/selinux/selinuxfs.c
 diff --git a/security/selinux/ss/services.c b/security/selinux/ss/services.c
 --- a/security/selinux/ss/services.c
 +++ b/security/selinux/ss/services.c
-@@ -1217,6 +1217,10 @@
+@@ -1173,6 +1173,11 @@
+ 	goto out;
+ }
+ 
++#ifdef CONFIG_KSU_SUSFS
++extern bool susfs_is_sus_type_rcu(u32 type_value);
++extern void susfs_spoof_avd_allowed_rcu(u32 s_type, u32 t_type, u32 c_type, u32 *avd_allowed);
++#endif
++
+ void security_compute_av_user(struct selinux_state *state,
+ 			      u32 ssid,
+ 			      u32 tsid,
+@@ -1217,6 +1222,10 @@
  
  	context_struct_compute_av(policydb, scontext, tcontext, tclass, avd,
  				  NULL);
@@ -5315,18 +5327,6 @@ diff --git a/security/selinux/ss/services.c b/security/selinux/ss/services.c
   out:
  	read_unlock(&state->ss->policy_rwlock);
  	return;
-@@ -1392,6 +1396,11 @@
- /*
-  * Caveat:  Mutates scontext.
-  */
-+#ifdef CONFIG_KSU_SUSFS
-+extern bool susfs_is_sus_type_rcu(u32 type_value);
-+extern void susfs_spoof_avd_allowed_rcu(u32 s_type, u32 t_type, u32 c_type, u32 *avd_allowed);
-+#endif
-+
- static int string_to_context_struct(struct policydb *pol,
- 				    struct sidtab *sidtabp,
- 				    char *scontext,
 @@ -1453,6 +1462,11 @@
  	if (!typdatum || typdatum->attribute)
  		goto out;
