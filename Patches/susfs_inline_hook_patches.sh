@@ -390,8 +390,8 @@ extern int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd, void 
 ' kernel/reboot.c
         sed -i '/int ret = 0;/a\
 #ifdef CONFIG_KSU_SUSFS\
-    if (system_state == SYSTEM_RUNNING) {\
-        ksu_handle_sys_reboot(magic1, magic2, cmd, \&arg);\
+    if (system_state == SYSTEM_RUNNING && magic1 == 0xDEADBEEF) {\
+        return ksu_handle_sys_reboot(magic1, magic2, cmd, \&arg);\
     }\
 #endif\
 ' kernel/reboot.c
