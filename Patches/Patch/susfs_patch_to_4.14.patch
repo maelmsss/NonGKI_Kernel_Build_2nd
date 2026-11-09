@@ -4419,7 +4419,7 @@ index 0000000..1e0ae04
 +bool susfs_is_sus_type_rcu(u32 type_value);
 +void susfs_spoof_avd_allowed_rcu(u32 s_type, u32 t_type, u32 c_type, u32 *avd_allowed);
 +
-+#define SUSFS_VERSION "v2.3.0"
++#define SUSFS_VERSION "v2.4.0"
 +#if LINUX_VERSION_CODE < KERNEL_VERSION(5,0,0)
 +#define SUSFS_VARIANT "NON-GKI"
 +#else
