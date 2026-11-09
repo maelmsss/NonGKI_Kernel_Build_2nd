@@ -90,6 +90,19 @@ runs:
 
           fi
 
+      - name: Blind cross-app uid lookup
+        if: env.SUSFS_ENABLE == 'true'
+        shell: bash
+        run: |
+          cd $GITHUB_WORKSPACE/device_kernel
+          if grep -q "fgp_should_swap" kernel/user.c; then
+            echo "[-] find_user blind already applied, Skipped."
+          else
+            cp /tmp/Patches/find_user-blind.patch ./
+            patch -p1 < find_user-blind.patch
+            echo "[+] find_user blind applied."
+          fi
+
       - name: Upload Build Patch Rejected Files
         if: env.BUILD_DEBUGGER == 'true'
         uses: actions/upload-artifact@v4
