@@ -51,10 +51,6 @@ env:
 
   KERNELSU_METHOD: "shell"
 
-  HOOK_METHOD: "syscall"
-
-  KPM_PATCH_SOURCE: "https://raw.githubusercontent.com/ShirkNeko/SukiSU_patch/refs/heads/main/kpm/patch_linux"
-
   BASEBAND_GUARD_ENABLE: "true"
   BASEBAND_GUARD_BOOT: "false"
 
