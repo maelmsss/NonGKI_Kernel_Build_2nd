@@ -2122,7 +2122,7 @@ new file mode 100644
 index 0000000..7dca01d
 --- /dev/null
 +++ b/fs/susfs.c
-@@ -0,0 +1,2728 @@
+@@ -0,0 +1,2730 @@
 +#include <linux/version.h>
 +#include <linux/cred.h>
 +#include <linux/fs.h>
@@ -2163,6 +2163,8 @@ index 0000000..7dca01d
 +extern struct cred *ksu_cred;
 +extern int susfs_get_non_sus_mnt_id_from_mnt(struct mount *orig_mnt);
 +extern struct vfsmount *susfs_get_non_sus_vfsmnt_from_vfsmnt(struct vfsmount *vfsmnt);
++static struct cred *susfs_switch_to_ksu_domain(void);
++static void susfs_restore_creds(struct cred *orig_cred);
 +
 +#ifdef CONFIG_KSU_SUSFS_ENABLE_LOG
 +DEFINE_STATIC_KEY_TRUE(susfs_is_log_enabled);
