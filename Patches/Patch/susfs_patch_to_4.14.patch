@@ -784,13 +784,15 @@ index d772fe4..b1170b4 100644
  	if (!mnt)
  		return ERR_PTR(-ENOMEM);
  
-@@ -1119,6 +1328,13 @@ static struct mount *clone_mnt(struct mount *old, struct dentry *root,
+@@ -1119,6 +1328,15 @@ static struct mount *clone_mnt(struct mount *old, struct dentry *root,
  
  	mnt->mnt.mnt_flags = old->mnt.mnt_flags;
  	mnt->mnt.mnt_flags &= ~(MNT_WRITE_HOLD|MNT_MARKED|MNT_INTERNAL);
 +
 +
 +#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
++	/* Only the clone that reused its parent's id is exempt from ida_remove. */
++	mnt->mnt.mnt_flags &= ~VFSMOUNT_MNT_FLAGS_KSU_UNSHARED_MNT;
 +	if (unlikely(is_mnt_ksu_unshared))
 +		mnt->mnt.mnt_flags |= VFSMOUNT_MNT_FLAGS_KSU_UNSHARED_MNT;
 +#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
@@ -5779,3 +5781,20 @@ diff --git a/drivers/kernelsu/manager/throne_tracker.c b/drivers/kernelsu/manage
 +#if defined(CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER) || defined(CONFIG_KSU_SUSFS_SUS_PATH)
  #include <linux/susfs.h>
  #endif
+diff --git a/drivers/kernelsu/feature/selinux_hide.c b/drivers/kernelsu/feature/selinux_hide.c
+--- a/drivers/kernelsu/feature/selinux_hide.c
++++ b/drivers/kernelsu/feature/selinux_hide.c
+@@ -955,11 +955,13 @@
+ #endif
+     // clang-format on
+ 
++#ifndef KSU_COMPAT_HAS_SUSFS_FEATURE_SELINUX_HIDE
+     ret = selinux_hide_init_setxattr();
+     if (ret) {
+         pr_err("selinux_hide: init: setxattr helpers err: %d\n", ret);
+         return ret;
+     }
++#endif
+ 
+ #ifndef KSU_COMPAT_HAS_SUSFS_FEATURE_SELINUX_HIDE
+ #ifdef CONFIG_KALLSYMS_ALL
