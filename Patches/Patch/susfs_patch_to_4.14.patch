@@ -5768,21 +5768,6 @@ diff --git a/security/selinux/selinuxfs.c b/security/selinux/selinuxfs.c
  static ssize_t sel_write_create(struct file *file, char *buf, size_t size)
  {
  	struct selinux_fs_info *fsi = file_inode(file)->i_sb->s_fs_info;
-diff --git a/drivers/kernelsu/supercall/dispatch.c b/drivers/kernelsu/supercall/dispatch.c
---- a/drivers/kernelsu/supercall/dispatch.c
-+++ b/drivers/kernelsu/supercall/dispatch.c
-@@ -1117,7 +1117,11 @@
-     case CMD_SUSFS_ADD_SUS_PATH_LOOP: {
-         susfs_add_sus_path_loop(arg);
-         return 0;
-     }
-+    case CMD_SUSFS_SET_SUS_PATH_UID_FILTER: {
-+        susfs_set_sus_path_uid_filter(arg);
-+        return 0;
-+    }
- #endif //#ifdef CONFIG_KSU_SUSFS_SUS_PATH
- #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
-     case CMD_SUSFS_HIDE_SUS_MNTS_FOR_NON_SU_PROCS: {
 diff --git a/drivers/kernelsu/manager/throne_tracker.c b/drivers/kernelsu/manager/throne_tracker.c
 --- a/drivers/kernelsu/manager/throne_tracker.c
 +++ b/drivers/kernelsu/manager/throne_tracker.c
@@ -5792,13 +5777,3 @@ diff --git a/drivers/kernelsu/manager/throne_tracker.c b/drivers/kernelsu/manage
 +#if defined(CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER) || defined(CONFIG_KSU_SUSFS_SUS_PATH)
  #include <linux/susfs.h>
  #endif
-@@ -367,6 +367,9 @@
-     // Refresh after tracking completes, including deferred scans.
-     susfs_parse_priority_app_strings();
- #endif
-+#ifdef CONFIG_KSU_SUSFS_SUS_PATH
-+    susfs_parse_sus_path_app_strings();
-+#endif
- }
- 
- void track_throne(unsigned int flags)
