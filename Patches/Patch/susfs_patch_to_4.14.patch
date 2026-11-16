@@ -5798,3 +5798,28 @@ diff --git a/drivers/kernelsu/feature/selinux_hide.c b/drivers/kernelsu/feature/
  
  #ifndef KSU_COMPAT_HAS_SUSFS_FEATURE_SELINUX_HIDE
  #ifdef CONFIG_KALLSYMS_ALL
+diff --git a/drivers/kernelsu/feature/selinux_hide.c b/drivers/kernelsu/feature/selinux_hide.c
+--- a/drivers/kernelsu/feature/selinux_hide.c
++++ b/drivers/kernelsu/feature/selinux_hide.c
+@@ -838,6 +838,13 @@
+ 
+ __maybe_static int selinux_hide_init_setxattr()
+ {
++#ifdef KSU_COMPAT_HAS_SUSFS_FEATURE_SELINUX_HIDE
++    /*
++     * The setxattr hook and inode_doinit_with_dentry_fn are not built when
++     * SUSFS supplies the manual selinux hide hooks. Nothing to resolve.
++     */
++    return 0;
++#else
+     int ret;
+ 
+     ret = ksu_selinux_superblock_init();
+@@ -855,6 +862,7 @@
+     inode_doinit_with_dentry_fn = &inode_doinit_with_dentry;
+ #endif
+     return 0;
++#endif
+ }
+ 
+ static int ksu_selinux_hide_enable()
