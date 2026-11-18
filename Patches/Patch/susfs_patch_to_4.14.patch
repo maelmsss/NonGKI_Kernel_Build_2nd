@@ -5616,56 +5616,10 @@ index 1111111..2222222 100644
  
  			if (!user)
  				break;
-diff --git a/security/selinux/hooks.c b/security/selinux/hooks.c
---- a/security/selinux/hooks.c
-+++ b/security/selinux/hooks.c
-@@ -98,6 +98,12 @@
- #include "audit.h"
- #include "avc_ss.h"
- 
-+#ifdef CONFIG_KSU_SUSFS
-+#include <linux/compiler.h>
-+extern bool ksu_selinux_hide_running __read_mostly;
-+extern int my_setprocattr(const char *name, void *value, size_t size);
-+#endif
-+
- struct selinux_state selinux_state;
- 
- /* SECMARK reference count */
-@@ -6468,6 +6473,17 @@
- 	return error;
- }
- 
-+#ifdef CONFIG_KSU_SUSFS
-+static int handle_selinux_setprocattr(const char *name, void *value, size_t size)
-+{
-+	if (likely(!strcmp(name, "current") &&
-+		   current_uid().val >= 10000 &&
-+		   READ_ONCE(ksu_selinux_hide_running)))
-+		return my_setprocattr(name, value, size);
-+	return selinux_setprocattr(name, value, size);
-+}
-+#endif
-+
- static int selinux_ismaclabel(const char *name)
- {
- 	return (strcmp(name, XATTR_SELINUX_SUFFIX) == 0);
-@@ -7005,7 +7021,11 @@
- 	LSM_HOOK_INIT(d_instantiate, selinux_d_instantiate),
- 
- 	LSM_HOOK_INIT(getprocattr, selinux_getprocattr),
-+#ifdef CONFIG_KSU_SUSFS
-+	LSM_HOOK_INIT(setprocattr, handle_selinux_setprocattr),
-+#else
- 	LSM_HOOK_INIT(setprocattr, selinux_setprocattr),
-+#endif
- 
- 	LSM_HOOK_INIT(ismaclabel, selinux_ismaclabel),
- 	LSM_HOOK_INIT(secid_to_secctx, selinux_secid_to_secctx),
 diff --git a/security/selinux/selinuxfs.c b/security/selinux/selinuxfs.c
 --- a/security/selinux/selinuxfs.c
 +++ b/security/selinux/selinuxfs.c
-@@ -42,6 +42,16 @@
+@@ -42,6 +42,15 @@
  #include "objsec.h"
  #include "conditional.h"
  
@@ -5673,10 +5627,9 @@ diff --git a/security/selinux/selinuxfs.c b/security/selinux/selinuxfs.c
 +extern struct page *fake_status;
 +extern struct static_key_false fake_status_initialize_key;
 +extern bool ksu_selinux_hide_running __read_mostly;
-+extern bool ksu_selinux_hide_enabled __read_mostly;
 +extern void initialize_fake_status(void);
-+extern ssize_t my_write_context(struct file *file, char *buf, size_t size);
-+extern ssize_t my_write_access(struct file *file, char *buf, size_t size);
++extern void ksu_hide_selinux_transaction_buf(struct file *file, char *buf, size_t size);
++extern void ksu_hide_selinux_access_reply(struct file *file, ssize_t ret);
 +#endif
 +
  enum sel_inos {
@@ -5718,7 +5671,7 @@ diff --git a/security/selinux/selinuxfs.c b/security/selinux/selinuxfs.c
 +static ssize_t handle_sel_write_context(struct file *file, char *buf, size_t size)
 +{
 +	if (likely(current_uid().val >= 10000 && READ_ONCE(ksu_selinux_hide_running)))
-+		return my_write_context(file, buf, size);
++		ksu_hide_selinux_transaction_buf(file, buf, size);
 +	return sel_write_context(file, buf, size);
 +}
 +#endif
@@ -5756,70 +5709,77 @@ diff --git a/security/selinux/selinuxfs.c b/security/selinux/selinuxfs.c
  };
  
  static ssize_t selinux_transaction_write(struct file *file, const char __user *buf, size_t size, loff_t *pos)
-@@ -869,6 +915,15 @@
+@@ -869,6 +915,20 @@
  	return length;
  }
  
 +#ifdef CONFIG_KSU_SUSFS
 +static ssize_t handle_sel_write_access(struct file *file, char *buf, size_t size)
 +{
++	ssize_t ret;
++
 +	if (likely(current_uid().val >= 10000 && READ_ONCE(ksu_selinux_hide_running)))
-+		return my_write_access(file, buf, size);
-+	return sel_write_access(file, buf, size);
++		ksu_hide_selinux_transaction_buf(file, buf, size);
++	ret = sel_write_access(file, buf, size);
++	if (likely(current_uid().val >= 10000 && READ_ONCE(ksu_selinux_hide_running)))
++		ksu_hide_selinux_access_reply(file, ret);
++	return ret;
 +}
 +#endif
 +
  static ssize_t sel_write_create(struct file *file, char *buf, size_t size)
  {
  	struct selinux_fs_info *fsi = file_inode(file)->i_sb->s_fs_info;
-diff --git a/drivers/kernelsu/manager/throne_tracker.c b/drivers/kernelsu/manager/throne_tracker.c
---- a/drivers/kernelsu/manager/throne_tracker.c
-+++ b/drivers/kernelsu/manager/throne_tracker.c
-@@ -13,4 +13,4 @@
- #include <linux/kernel.h> // for container_of in UL
--#ifdef CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER
-+#if defined(CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER) || defined(CONFIG_KSU_SUSFS_SUS_PATH)
- #include <linux/susfs.h>
- #endif
 diff --git a/drivers/kernelsu/feature/selinux_hide.c b/drivers/kernelsu/feature/selinux_hide.c
 --- a/drivers/kernelsu/feature/selinux_hide.c
 +++ b/drivers/kernelsu/feature/selinux_hide.c
-@@ -955,11 +955,13 @@
- #endif
-     // clang-format on
- 
-+#ifndef KSU_COMPAT_HAS_SUSFS_FEATURE_SELINUX_HIDE
-     ret = selinux_hide_init_setxattr();
-     if (ret) {
-         pr_err("selinux_hide: init: setxattr helpers err: %d\n", ret);
-         return ret;
-     }
-+#endif
- 
- #ifndef KSU_COMPAT_HAS_SUSFS_FEATURE_SELINUX_HIDE
- #ifdef CONFIG_KALLSYMS_ALL
-diff --git a/drivers/kernelsu/feature/selinux_hide.c b/drivers/kernelsu/feature/selinux_hide.c
---- a/drivers/kernelsu/feature/selinux_hide.c
-+++ b/drivers/kernelsu/feature/selinux_hide.c
-@@ -838,6 +838,13 @@
- 
- __maybe_static int selinux_hide_init_setxattr()
- {
-+#ifdef KSU_COMPAT_HAS_SUSFS_FEATURE_SELINUX_HIDE
-+    /*
-+     * The setxattr hook and inode_doinit_with_dentry_fn are not built when
-+     * SUSFS supplies the manual selinux hide hooks. Nothing to resolve.
-+     */
-+    return 0;
-+#else
-     int ret;
- 
-     ret = ksu_selinux_superblock_init();
-@@ -855,6 +862,7 @@
-     inode_doinit_with_dentry_fn = &inode_doinit_with_dentry;
- #endif
-     return 0;
-+#endif
+@@ -291,6 +291,37 @@ void initialize_fake_status(void)
+ 	if (!ksu_prepare_fake_status_page())
+ 		fake_status = ksu_fake_status_page;
  }
++
++/* Called from selinuxfs.c. SukiSU does not hijack the transaction fops when SUSFS is on. */
++void ksu_hide_selinux_transaction_buf(struct file *file, char *buf, size_t size)
++{
++	if (!ksu_selinux_hide_enabled || !ksu_selinux_hide_running)
++		return;
++	if (!buf || size < 2)
++		return;
++	if (!ksu_should_destroy_context(buf, size))
++		return;
++	buf[1] = ';';
++}
++
++void ksu_hide_selinux_access_reply(struct file *file, ssize_t ret)
++{
++	struct simple_transaction_argresp *ar;
++	uint32_t avd_allowed, ff, avd_auditallow, avd_auditdeny, avd_seqno, avd_flags;
++
++	if (ret <= 0 || !file || !ksu_selinux_hide_running)
++		return;
++	ar = file->private_data;
++	if (!ar)
++		return;
++	if (sscanf(ar->data, "%x %x %x %x %u %x", &avd_allowed, &ff,
++		   &avd_auditallow, &avd_auditdeny, &avd_seqno, &avd_flags) != 6)
++		return;
++	avd_seqno = 1;
++	ar->size = scnprintf(ar->data, SIMPLE_TRANSACTION_LIMIT,
++			     "%x %x %x %x %u %x", avd_allowed, ff,
++			     avd_auditallow, avd_auditdeny, avd_seqno, avd_flags);
++}
+ #endif // CONFIG_KSU_SUSFS
  
- static int ksu_selinux_hide_enable()
+ static int (*sel_open_handle_status_fn)(struct inode *inode, struct file *filp) __read_mostly = nullptr;
+diff --git a/drivers/kernelsu/manager/pkg_observer.c b/drivers/kernelsu/manager/pkg_observer.c
+--- a/drivers/kernelsu/manager/pkg_observer.c
++++ b/drivers/kernelsu/manager/pkg_observer.c
+@@ -110,5 +110,8 @@ static inline void ksu_rename_observer(struct dentry *old_dentry, struct dentry
+ 	pr_info("renameat: %s -> %s, /data/system d_inode: 0x%lx \n", old_dentry->d_iname, new_dentry->d_iname, system_dir_inode_ptr);
+ 	track_throne(false);
++#ifdef CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER
++	susfs_parse_priority_app_strings();
++#endif
+ #if defined(CONFIG_KSU_SUSFS_SUS_PATH) 
+ 	// Renew the sus path uid bitmap filter after packages.list changed
+ 	susfs_parse_sus_path_app_strings();
