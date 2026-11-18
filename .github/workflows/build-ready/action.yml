@@ -109,29 +109,29 @@ runs:
           echo "::endgroup::"
           echo "[+] Cleaned hook."
 
-      - name: Set KernelSU
+            - name: Set KernelSU
         shell: bash
         run: |
           cd $GITHUB_WORKSPACE/device_kernel
 
           if [[ "${{ env.KERNELSU_AUTO_FORK }}" == "sukisu" ]]; then
-          KERNELSU_AUTHOR="SukiSU-Ultra"
-          KERNELSU_NAME="SukiSU-Ultra"
-          KERNELSU_ORIGIN_BRANCH="main"
-          KERNELSU_BRANCH="builtin-new"
-        elif [[ "${{ env.KERNELSU_AUTO_FORK }}" == "bakasu" ]]; then
-          KERNELSU_AUTHOR="Baka-SU"
-          KERNELSU_NAME="BakaSU"
-          KERNELSU_ORIGIN_BRANCH="main"
-          KERNELSU_BRANCH="sync-up"
-        else
-          echo "[-] fork must be sukisu or bakasu"
-          false
-        fi
-        KERNELSU_FOLDER="KernelSU"
-        echo "KERNELSU_NAME=$KERNELSU_FOLDER" >> $GITHUB_ENV
-        curl -fsSL "https://raw.githubusercontent.com/${KERNELSU_AUTHOR}/${KERNELSU_NAME}/refs/heads/${KERNELSU_ORIGIN_BRANCH}/kernel/setup.sh" | bash -s "$KERNELSU_BRANCH"
-        
+            KERNELSU_AUTHOR="SukiSU-Ultra"
+            KERNELSU_NAME="SukiSU-Ultra"
+            KERNELSU_ORIGIN_BRANCH="main"
+            KERNELSU_BRANCH="builtin-new"
+          elif [[ "${{ env.KERNELSU_AUTO_FORK }}" == "bakasu" ]]; then
+            KERNELSU_AUTHOR="Baka-SU"
+            KERNELSU_NAME="BakaSU"
+            KERNELSU_ORIGIN_BRANCH="main"
+            KERNELSU_BRANCH="sync-up"
+          else
+            echo "[-] fork must be sukisu or bakasu"
+            false
+          fi
+
+          KERNELSU_FOLDER="KernelSU"
+          echo "KERNELSU_NAME=$KERNELSU_FOLDER" >> $GITHUB_ENV
+          curl -fsSL "https://raw.githubusercontent.com/${KERNELSU_AUTHOR}/${KERNELSU_NAME}/refs/heads/${KERNELSU_ORIGIN_BRANCH}/kernel/setup.sh" | bash -s "$KERNELSU_BRANCH"
       - name: Set KSU and SUSFS for DEFCONFIG
         shell: bash
         run: |
