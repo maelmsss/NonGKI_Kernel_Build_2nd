@@ -114,34 +114,24 @@ runs:
         run: |
           cd $GITHUB_WORKSPACE/device_kernel
 
-          if [[ "${{ env.KERNELSU_AUTO_FORK }}" != "bakasu" ]]; then
-            echo "[-] This tree builds exynos982x with BakaSU sync-up only."
-            false
-          fi
-
+          if [[ "${{ env.KERNELSU_AUTO_FORK }}" == "sukisu" ]]; then
+          KERNELSU_AUTHOR="SukiSU-Ultra"
+          KERNELSU_NAME="SukiSU-Ultra"
+          KERNELSU_ORIGIN_BRANCH="main"
+          KERNELSU_BRANCH="builtin-new"
+        elif [[ "${{ env.KERNELSU_AUTO_FORK }}" == "bakasu" ]]; then
           KERNELSU_AUTHOR="Baka-SU"
           KERNELSU_NAME="BakaSU"
           KERNELSU_ORIGIN_BRANCH="main"
           KERNELSU_BRANCH="sync-up"
-          KERNELSU_FOLDER="KernelSU"
-          echo "KERNELSU_NAME=$KERNELSU_FOLDER" >> $GITHUB_ENV
-
-          if [[ "${{ env.KERNELSU_METHOD }}" == "shell" ]]; then
-            curl -fsSL "https://raw.githubusercontent.com/${KERNELSU_AUTHOR}/${KERNELSU_NAME}/refs/heads/${KERNELSU_ORIGIN_BRANCH}/kernel/setup.sh" | bash -s "$KERNELSU_BRANCH"
-          elif [[ "${{ env.KERNELSU_METHOD }}" == "manual" ]]; then
-            git clone "https://github.com/$KERNELSU_AUTHOR/$KERNELSU_NAME.git" -b "$KERNELSU_BRANCH" "$KERNELSU_FOLDER"
-            ln -sf "../$KERNELSU_FOLDER/kernel" "drivers/kernelsu"
-            grep -q "kernelsu" drivers/Makefile || printf '\nobj-$(CONFIG_KSU) += kernelsu/\n' >> drivers/Makefile
-            grep -q 'source "drivers/kernelsu/Kconfig"' drivers/Kconfig || sed -i '/endmenu/i\source "drivers/kernelsu/Kconfig"' drivers/Kconfig
-          elif [[ "${{ env.KERNELSU_METHOD }}" == "only" ]]; then
-            git clone "https://github.com/$KERNELSU_AUTHOR/$KERNELSU_NAME.git" -b "$KERNELSU_BRANCH" "$KERNELSU_FOLDER"
-            ln -sf "../$KERNELSU_FOLDER/kernel" "drivers/kernelsu"
-          else
-            echo "[-] KERNELSU_METHOD must be shell, manual or only."
-            false
-          fi
-          echo "KERNELSU_METHOD=${{ env.KERNELSU_METHOD }}" >> $GITHUB_ENV
-
+        else
+          echo "[-] fork must be sukisu or bakasu"
+          false
+        fi
+        KERNELSU_FOLDER="KernelSU"
+        echo "KERNELSU_NAME=$KERNELSU_FOLDER" >> $GITHUB_ENV
+        curl -fsSL "https://raw.githubusercontent.com/${KERNELSU_AUTHOR}/${KERNELSU_NAME}/refs/heads/${KERNELSU_ORIGIN_BRANCH}/kernel/setup.sh" | bash -s "$KERNELSU_BRANCH"
+        
       - name: Set KSU and SUSFS for DEFCONFIG
         shell: bash
         run: |
