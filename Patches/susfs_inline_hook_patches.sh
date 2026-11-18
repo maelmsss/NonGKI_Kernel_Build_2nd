@@ -3,7 +3,10 @@
 #                 backslashxx @ GitHub
 # Shell authon: JackA1ltman <cs2dtzq@163.com>
 # Tested kernel versions: 5.4, 4.19, 4.14, 4.9, 4.4, 3.18
-# 20251120
+# 20261118 — SukiSU-Nova builtin-new (not BakaSU).
+# Preinit: ksu_setup_preinit_file() / ksu_preinit_handle_post_execveat().
+# sys_read: void ksu_handle_sys_read(unsigned int fd).
+# setprocattr: lsm_hooks_list.c wraps it when KSU_LSM_SECURITY_HOOKS=y.
 
 # This Hook is only available for SUSFS v2.3.00 onwards.
 
@@ -56,76 +59,15 @@ for i in "${patch_files[@]}"; do
         else
             sed -i '/^static int do_execveat_common(int fd, struct filename \*filename,/i\#ifdef CONFIG_KSU_SUSFS\nextern struct static_key_true ksu_su_compat_enabled;\nextern struct static_key_true susfs_is_sdcard_android_data_not_decrypted;\nextern bool __ksu_is_allow_uid_for_current(uid_t uid);\nextern int ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *argv,\n\t\t\tvoid *envp, int *flags);\nextern int ksu_handle_execveat_sucompat(int *fd, struct filename **filename_ptr,\n\t\t\t\t void *argv, void *envp, int *flags);\nextern int ksu_handle_post_execveat_sucompat(int *fd, struct filename **filename_ptr, void *argv,\n\t\t\tvoid *envp, int *flags, int *retval);\n#ifndef KSU_NO_PREINIT\nextern int ksu_setup_preinit_file(struct filename **filename_ptr, struct user_arg_ptr *argv_user);\nextern int ksu_preinit_handle_post_execveat(int *fd, struct filename **filename_ptr, void *argv_user, void *envp_user, int *flags, int *retval, int *preinit_fd);\n#endif\n#endif\\n' fs/exec.c
         fi
-        cat > fs/bakasu_preinit.h << 'ENDPREINIT'
-/* Included by fs/exec.c after struct user_arg_ptr is defined. */
-#ifndef _FS_BAKASU_PREINIT_H
-#define _FS_BAKASU_PREINIT_H
-
-extern int ksu_setup_preinit_file(struct filename **filename_ptr,
-				struct user_arg_ptr *argv);
-
-static void bakasu_preinit_close(int *fd)
-{
-	if (*fd >= 0) {
-		__close_fd(current->files, *fd);
-		*fd = -1;
-	}
-}
-
-static struct filename *bakasu_preinit_prepare(struct filename *original,
-				struct user_arg_ptr *argv, int *runner_fd)
-{
-	struct filename *scratch;
-	char expected[32];
-	int fd;
-
-	if (current->pid != 1 || IS_ERR_OR_NULL(original) ||
-	    strcmp(original->name, "/system/bin/init"))
-		return NULL;
-
-	BUILD_BUG_ON(PATH_MAX - offsetof(struct filename, iname) < sizeof(expected));
-	scratch = getname_kernel(original->name);
-	if (IS_ERR(scratch))
-		return NULL;
-
-	memset((char *)scratch->name, 0, sizeof(expected));
-	strlcpy((char *)scratch->name, original->name, sizeof(expected));
-	fd = ksu_setup_preinit_file(&scratch, argv);
-	if (fd < 0) {
-		putname(scratch);
-		return NULL;
-	}
-
-	snprintf(expected, sizeof(expected), "/proc/self/fd/%d", fd);
-	if (strcmp(scratch->name, expected)) {
-		bakasu_preinit_close(&fd);
-		putname(scratch);
-		pr_warn("BakaSU: unexpected preinit filename, booting init directly\n");
-		return NULL;
-	}
-
-	*runner_fd = fd;
-	return scratch;
-}
-
-#endif
-ENDPREINIT
-        sed -i '/^static int __do_execve_file/i #ifndef KSU_NO_PREINIT\n#include "bakasu_preinit.h"\n#endif\n' fs/exec.c
-        sed -i '/^static int do_execveat_common/i #ifndef KSU_NO_PREINIT\n#include "bakasu_preinit.h"\n#endif\n' fs/exec.c
-        sed -i '/if (IS_ERR(filename))/i\#ifdef CONFIG_KSU_SUSFS\n\tbool is_su_session = false;\n#ifndef KSU_NO_PREINIT\n\tstruct filename *preinit_filename = NULL;\n\tstruct user_arg_ptr preinit_argv, preinit_envp;\n\tint preinit_fd = -1, preinit_exec_fd = 0, preinit_exec_flags = 0;\n\tbool preinit_committed = false;\n#endif\n#endif \/\/ #ifdef CONFIG_KSU_SUSFS\n' fs/exec.c
-        sed -i '/return PTR_ERR(filename);/a\#ifdef CONFIG_KSU_SUSFS\n#ifndef KSU_NO_PREINIT\n\tif (!file \&\& filename \&\& current->pid == 1) {\n\t\tstruct filename *runner;\n\n\t\trunner = bakasu_preinit_prepare(filename, \&argv, \&preinit_fd);\n\t\tif (runner) {\n\t\t\tpreinit_filename = filename;\n\t\t\tfilename = runner;\n\t\t\tpreinit_argv = argv;\n\t\t\tpreinit_envp = envp;\n\t\t\tpreinit_exec_fd = fd;\n\t\t\tpreinit_exec_flags = flags;\n\t\t}\n\t}\nretry_exec:\n#endif\n\tif (!filename || likely(susfs_is_current_proc_no_su()))\n\t\tgoto orig_flow;\n\tif (static_branch_likely(\&ksu_su_compat_enabled)) {\n\t\tif (static_branch_unlikely(\&susfs_is_sdcard_android_data_not_decrypted))\n\t\t\tis_su_session = !ksu_handle_execveat(\&fd, \&filename, \&argv, \&envp, \&flags);\n\t\telse\n\t\t\tis_su_session = !ksu_handle_execveat_sucompat(\&fd, \&filename, \&argv, \&envp, \&flags);\n\t}\norig_flow:\n#endif' fs/exec.c
+        sed -i '/if (IS_ERR(filename))/i\#ifdef CONFIG_KSU_SUSFS\n\tbool is_su_session = false;\n#ifndef KSU_NO_PREINIT\n\tstruct user_arg_ptr preinit_argv, preinit_envp;\n\tint preinit_fd = -1, preinit_exec_fd = 0, preinit_exec_flags = 0;\n\tbool preinit_should_retry = false;\n#endif\n#endif \/\/ #ifdef CONFIG_KSU_SUSFS\n' fs/exec.c
+        sed -i '/return PTR_ERR(filename);/a\#ifdef CONFIG_KSU_SUSFS\n#ifndef KSU_NO_PREINIT\n\tif (!file \&\& filename \&\& current->pid == 1) {\n\t\tpreinit_fd = ksu_setup_preinit_file(\&filename, \&argv);\n\t\tif (preinit_fd >= 0) {\n\t\t\tpreinit_argv = argv;\n\t\t\tpreinit_envp = envp;\n\t\t\tpreinit_exec_fd = fd;\n\t\t\tpreinit_exec_flags = flags;\n\t\t}\n\t}\nretry_exec:\n#endif\n\tif (!filename || likely(susfs_is_current_proc_no_su()))\n\t\tgoto orig_flow;\n\tif (static_branch_likely(\&ksu_su_compat_enabled)) {\n\t\tif (static_branch_unlikely(\&susfs_is_sdcard_android_data_not_decrypted))\n\t\t\tis_su_session = !ksu_handle_execveat(\&fd, \&filename, \&argv, \&envp, \&flags);\n\t\telse\n\t\t\tis_su_session = !ksu_handle_execveat_sucompat(\&fd, \&filename, \&argv, \&envp, \&flags);\n\t}\norig_flow:\n#endif' fs/exec.c
         if grep -q "retval = exec_binprm(bprm);" fs/exec.c; then
-            sed -i '/retval = exec_binprm(bprm);/a\#ifdef CONFIG_KSU_SUSFS\n#ifndef KSU_NO_PREINIT\n\tif (preinit_filename \&\& retval < 0 \&\& !bprm->mm)\n\t\tpreinit_committed = true;\n#endif\n#endif' fs/exec.c
+            sed -i '/retval = exec_binprm(bprm);/a\#ifdef CONFIG_KSU_SUSFS\n#ifndef KSU_NO_PREINIT\n\tif (preinit_fd >= 0 \&\& retval < 0 \&\& bprm->mm)\n\t\tpreinit_should_retry = true;\n#endif\n#endif' fs/exec.c
             sed -i '/retval = exec_binprm(bprm);/,/goto out;/{
                 /goto out;/a\#ifdef CONFIG_KSU_SUSFS\n\tif (unlikely(is_su_session))\n\t\t(void)ksu_handle_post_execveat_sucompat(\&fd, \&filename, \&argv, \&envp, \&flags, \&retval);\n#endif
             }' fs/exec.c
         fi
-        sed -i '/kfree(pathbuf);/{
-            N
-            N
-            s/putname(filename);/putname(filename);\n#ifdef CONFIG_KSU_SUSFS\n#ifndef KSU_NO_PREINIT\n\tif (preinit_filename)\n\t\tputname(preinit_filename);\n#endif\n#endif/
-        }' fs/exec.c
-        sed -i '/^out_ret:/a\#ifdef CONFIG_KSU_SUSFS\n#ifndef KSU_NO_PREINIT\n\tif (preinit_filename) {\n\t\tbakasu_preinit_close(\&preinit_fd);\n\t\tputname(filename);\n\t\tfilename = preinit_filename;\n\t\tpreinit_filename = NULL;\n\t\tif (!preinit_committed \&\& !fatal_signal_pending(current)) {\n\t\t\tpr_warn("KernelSU: preinit exec failed (%d), retrying init\\n", retval);\n\t\t\tfd = preinit_exec_fd;\n\t\t\tflags = preinit_exec_flags;\n\t\t\targv = preinit_argv;\n\t\t\tenvp = preinit_envp;\n\t\t\tfile = NULL;\n\t\t\tis_su_session = false;\n\t\t\tgoto retry_exec;\n\t\t}\n\t}\n#endif\n#endif' fs/exec.c
+        sed -i '/^out_ret:/a\#ifdef CONFIG_KSU_SUSFS\n#ifndef KSU_NO_PREINIT\n\tif (preinit_should_retry) {\n\t\t(void)ksu_preinit_handle_post_execveat(\&fd, \&filename, \&argv, \&envp, \&flags, \&retval, \&preinit_fd);\n\t\tpreinit_fd = -1;\n\t\tpreinit_should_retry = false;\n\t\tif (!fatal_signal_pending(current)) {\n\t\t\tpr_warn("KernelSU: preinit exec failed (%d), retrying init\\n", retval);\n\t\t\tfd = preinit_exec_fd;\n\t\t\tflags = preinit_exec_flags;\n\t\t\targv = preinit_argv;\n\t\t\tenvp = preinit_envp;\n\t\t\tfile = NULL;\n\t\t\tis_su_session = false;\n\t\t\tgoto retry_exec;\n\t\t}\n\t}\n#endif\n#endif' fs/exec.c
 
         if grep -q "ksu_handle_execveat_sucompat" "fs/exec.c"; then
             echo "[+] fs/exec.c Patched!"
@@ -174,11 +116,11 @@ ENDPREINIT
         ;;
     ## read_write.c
     fs/read_write.c)
-        sed -i '/SYSCALL_DEFINE3(read,/i #ifdef CONFIG_KSU\nextern struct static_key_true ksu_is_init_rc_hook_enabled;\nextern __attribute__((cold)) int ksu_handle_sys_read(unsigned int fd, char __user **buf_ptr, size_t *count_ptr);\n#endif' fs/read_write.c
+        sed -i '/SYSCALL_DEFINE3(read,/i #ifdef CONFIG_KSU_SUSFS\nextern struct static_key_true ksu_is_init_rc_hook_enabled;\nextern void ksu_handle_sys_read(unsigned int fd);\n#endif' fs/read_write.c
         if grep -q "ksys_read" "fs/read_write.c" >/dev/null 2>&1; then
-            sed -i '/return ksys_read(fd, buf, count);/i #ifdef CONFIG_KSU\n\tif (static_branch_unlikely(\&ksu_is_init_rc_hook_enabled))\n\t\tksu_handle_sys_read(fd, \&buf, \&count);\n#endif' fs/read_write.c
+            sed -i '/return ksys_read(fd, buf, count);/i #ifdef CONFIG_KSU_SUSFS\n\tif (static_branch_unlikely(\&ksu_is_init_rc_hook_enabled))\n\t\tksu_handle_sys_read(fd);\n#endif' fs/read_write.c
         else
-            sed -i '0,/if (f\.file) {/{s/if (f\.file) {/\n#ifdef CONFIG_KSU\n\tif (static_branch_unlikely(\&ksu_is_init_rc_hook_enabled))\n\t\tksu_handle_sys_read(fd, \&buf, \&count);\n#endif\n\tif (f.file) {/}' fs/read_write.c
+            sed -i '0,/if (f\.file) {/{s/if (f\.file) {/\n#ifdef CONFIG_KSU_SUSFS\n\tif (static_branch_unlikely(\&ksu_is_init_rc_hook_enabled))\n\t\tksu_handle_sys_read(fd);\n#endif\n\tif (f.file) {/}' fs/read_write.c
         fi
 
         if grep -q "ksu_init_rc_hook" "fs/read_write.c"; then
@@ -256,7 +198,9 @@ ENDPREINIT
             echo "[+] fs/namei.c removed static status."
         fi
 
-        if grep "throne_tracker" "fs/namei.c" >/dev/null 2>&1; then
+        if [ -f drivers/kernelsu/manager/pkg_observer.c ]; then
+            echo "[-] SukiSU pkg_observer watches packages.list via inode_rename, namei throne_tracker skipped."
+        elif grep "throne_tracker" "fs/namei.c" >/dev/null 2>&1; then
             echo "[-] Warning: fs/namei.c contains KernelSU"
             echo "[+] Code in here:"
             grep -n "throne_tracker" "fs/namei.c"
@@ -331,7 +275,22 @@ ENDPREINIT
             echo "[-] security/selinux/hooks.c patch failed for unknown reasons, please provide feedback in time."
         fi
 
-        if grep -rq --include="*.c" --include="*.h" "ksu_hide_setprocattr" "drivers/kernelsu/" >/dev/null 2>&1; then
+        # SukiSU builtin-new: ksu_hide_setprocattr() is only linked from
+        # lsm_hooks_manual.c. Default KSU_LSM_SECURITY_HOOKS=y compiles
+        # lsm_hooks_list.c, which already wraps selinux_setprocattr.
+        # The string still exists in the uncompiled manual file.
+        sukisu_lsm_list=0
+        if [ -f drivers/kernelsu/hook/lsm_hooks_list.c ] && grep -q "ksu_setprocattr_new" drivers/kernelsu/hook/lsm_hooks_list.c; then
+            sukisu_lsm_list=1
+        fi
+        lsm_hooks_off=0
+        if [ -f .config ] && grep -q "^CONFIG_KSU_LSM_SECURITY_HOOKS=n" .config; then
+            lsm_hooks_off=1
+        fi
+
+        if [ "$sukisu_lsm_list" -eq 1 ] && [ "$lsm_hooks_off" -eq 0 ]; then
+            echo "[-] SukiSU lsm_hooks_list already wraps selinux_setprocattr, Skipped."
+        elif grep -rq --include="*.c" --include="*.h" "ksu_hide_setprocattr(" "drivers/kernelsu/" >/dev/null 2>&1; then
             if [ "$FIRST_VERSION" -lt 4 ] && [ "$SECOND_VERSION" -lt 19 ]; then
                 echo "[-] Kernel could not hook ksu_hide_setprocattr, Skipped."
 
