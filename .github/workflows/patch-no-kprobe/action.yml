@@ -9,17 +9,20 @@ runs:
           cd $GITHUB_WORKSPACE/device_kernel
 
           # Detect SUSFS is used to enable the SUSFS inline hook
-          if [[ ${{ env.SUSFS_ENABLE }} == "true" ]]; then
-            # Core
+          if [[ "${{ env.KERNELSU_AUTO_FORK }}" == "xxksu" ]]; then
+            DEF="./arch/${{ env.KERNEL_ARCH }}/configs/${{ env.DEFCONFIG_NAME }}"
+            grep -q "^CONFIG_KSU_HACK_ARM64_BRANCH_LINK=y" "$DEF" || echo "CONFIG_KSU_HACK_ARM64_BRANCH_LINK=y" >> "$DEF"
+            sed -i '/CONFIG_KSU_TAMPER_SYSCALL_TABLE/d' "$DEF"
+            echo "[+] xxksu branch-link. Inline hook skipped."
+
+          elif [[ "${{ env.SUSFS_ENABLE }}" == "true" ]]; then
             cp /tmp/Patches/susfs_inline_hook_patches.sh ./
             bash susfs_inline_hook_patches.sh ./
 
             echo "[+] executed SUSFS inline hook successfully."
 
-          # Check syscall hook
           else
-            echo "[-] SUSFS_ENABLE is not true. This tree only ships Patches/susfs_inline_hook_patches.sh."
-            false
+            echo "[-] SUSFS_ENABLE is not true. Inline hook skipped."
 
           fi
 
