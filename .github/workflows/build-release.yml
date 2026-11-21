@@ -112,10 +112,14 @@ jobs:
 
           git clone -b sync-up https://github.com/Baka-SU/BakaSU.git KernelSU-BakaSU
           KSU_BAKASU_VERSION=$(cd KernelSU-BakaSU && expr $(/usr/bin/git rev-list --count HEAD) + 30000 + 700)
+          git clone -b master https://github.com/backslashxx/KernelSU.git KernelSU-xxksu
+          KSU_XXKSU_VERSION=$(cd KernelSU-xxksu && expr $(/usr/bin/git rev-list --count HEAD) + 30000 - 80)
 
           echo "RELEASE_NOTES<<EOF" >> $GITHUB_ENV
           echo "$RELEASE_NOTES" >> $GITHUB_ENV
           echo "[KernelSU-BakaSU](https://github.com/Baka-SU/BakaSU/tree/sync-up) Version: $KSU_BAKASU_VERSION  " >> $GITHUB_ENV
+          echo "[KernelSU-xxksu](https://github.com/backslashxx/KernelSU/releases) Version: $KSU_XXKSU_VERSION  " >> $GITHUB_ENV
+
           echo "EOF" >> $GITHUB_ENV
 
       - name: Create GitHub Release
