@@ -114,15 +114,15 @@ runs:
         run: |
           cd $GITHUB_WORKSPACE/device_kernel
 
-          if [[ "${{ env.KERNELSU_AUTO_FORK }}" != "bakasu" ]]; then
-            echo "[-] This tree builds exynos982x with BakaSU sync-up only."
+          if [[ "${{ env.KERNELSU_AUTO_FORK }}" != "xxksu" ]]; then
+            echo "[-] This tree builds exynos982x with xxksu."
             false
           fi
 
-          KERNELSU_AUTHOR="Baka-SU"
-          KERNELSU_NAME="BakaSU"
-          KERNELSU_ORIGIN_BRANCH="main"
-          KERNELSU_BRANCH="sync-up"
+          KERNELSU_AUTHOR="backslashxx"
+          KERNELSU_NAME="KernelSU"
+          KERNELSU_ORIGIN_BRANCH="master"
+          KERNELSU_BRANCH="master"
           KERNELSU_FOLDER="KernelSU"
           echo "KERNELSU_NAME=$KERNELSU_FOLDER" >> $GITHUB_ENV
 
